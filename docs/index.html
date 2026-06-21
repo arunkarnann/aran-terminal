@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aran Terminal — focus dashboard for AI agent terminals</title>
+    <meta
+      name="description"
+      content="A real terminal with a focus dashboard for running many AI coding agents at once. Knows which session actually needs you."
+    />
+    <style>
+      :root {
+        --bg: #282a36;
+        --panel: #21222c;
+        --border: #44475a;
+        --text: #f8f8f2;
+        --muted: #6272a4;
+        --primary: #bd93f9;
+        --accent: #50fa7b;
+        --waiting: #ffb86c;
+        --radius: 0px; /* sharp, like the app */
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(900px 500px at 80% -10%, rgba(189, 147, 249, 0.12), transparent),
+          var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--primary); text-decoration: none; }
+      a:hover { color: var(--accent); }
+      .wrap { max-width: 920px; margin: 0 auto; padding: 0 1.25rem; }
+
+      /* ---- nav ---- */
+      nav {
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--panel) 80%, transparent);
+        backdrop-filter: blur(8px);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+      nav .wrap {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 56px;
+      }
+      .brand { font-weight: 700; letter-spacing: 0.02em; display: flex; align-items: center; gap: 0.55rem; }
+      .brand .mark {
+        width: 12px; height: 12px; background: var(--accent); border-radius: var(--radius);
+        box-shadow: 0 0 12px var(--accent);
+      }
+      .nav-links { display: flex; gap: 1.25rem; font-size: 0.9rem; }
+
+      /* ---- hero ---- */
+      header { padding: 5rem 0 3rem; text-align: center; }
+      .eyebrow {
+        display: inline-block;
+        font-family: "Menlo", "Monaco", monospace;
+        font-size: 0.72rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--waiting);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 0.3rem 0.7rem;
+        margin-bottom: 1.5rem;
+      }
+      h1 { font-size: clamp(2.4rem, 6vw, 4rem); margin: 0 0 1rem; line-height: 1.05; letter-spacing: -0.02em; }
+      h1 .grad {
+        background: linear-gradient(90deg, var(--primary), var(--accent));
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .lede { font-size: 1.15rem; color: #c9cbe0; max-width: 640px; margin: 0 auto 2rem; }
+      .cta { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+      .btn {
+        display: inline-block;
+        padding: 0.7rem 1.4rem;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        font-weight: 600;
+        font-size: 0.95rem;
+        transition: transform 0.08s ease, border-color 0.15s ease, background 0.15s ease;
+      }
+      .btn:hover { transform: translateY(-1px); }
+      .btn--primary { background: var(--primary); color: #1a1b26; border-color: var(--primary); }
+      .btn--primary:hover { background: var(--accent); border-color: var(--accent); color: #14241a; }
+      .btn--ghost { color: var(--text); }
+      .btn--ghost:hover { border-color: var(--primary); }
+
+      /* ---- terminal mock ---- */
+      .term {
+        margin: 3.5rem auto 0;
+        max-width: 760px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+        overflow: hidden;
+        text-align: left;
+      }
+      .term-bar {
+        display: flex; align-items: center; gap: 0.6rem;
+        padding: 0.6rem 0.9rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.78rem; color: var(--muted);
+      }
+      .term-bar .sq { width: 11px; height: 11px; border-radius: var(--radius); }
+      .term-body {
+        font-family: "Menlo", "Monaco", monospace;
+        font-size: 0.82rem;
+        padding: 1rem 1.1rem 1.3rem;
+        color: #d7d9e6;
+      }
+      .term-body .row { display: flex; align-items: center; gap: 0.6rem; padding: 0.12rem 0; }
+      .dot { width: 8px; height: 8px; border-radius: var(--radius); flex: none; }
+      .dot--run { background: var(--accent); }
+      .dot--wait { background: var(--waiting); }
+      .dot--idle { background: var(--muted); }
+      .tag { margin-left: auto; font-size: 0.7rem; letter-spacing: 0.08em; }
+      .tag--wait { color: var(--waiting); }
+      .tag--run { color: var(--accent); }
+      .tag--idle { color: var(--muted); }
+
+      /* ---- sections ---- */
+      section { padding: 4rem 0; border-top: 1px solid var(--border); }
+      h2 { font-size: 1.6rem; margin: 0 0 0.4rem; letter-spacing: -0.01em; }
+      .sub { color: var(--muted); margin: 0 0 2rem; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); }
+      .card { background: var(--panel); padding: 1.4rem; }
+      .card h3 { margin: 0 0 0.4rem; font-size: 1.02rem; }
+      .card h3 .ic { color: var(--primary); margin-right: 0.4rem; }
+      .card p { margin: 0; color: #b6b9cf; font-size: 0.92rem; }
+
+      pre {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.1rem 1.2rem;
+        overflow-x: auto;
+        font-family: "Menlo", "Monaco", monospace;
+        font-size: 0.85rem;
+        color: #d7d9e6;
+      }
+      pre .c { color: var(--muted); }
+      pre .p { color: var(--accent); }
+
+      footer { border-top: 1px solid var(--border); padding: 2.5rem 0; color: var(--muted); font-size: 0.85rem; text-align: center; }
+      .note { font-size: 0.8rem; color: var(--muted); margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <div class="wrap">
+        <div class="brand"><span class="mark"></span> Aran Terminal</div>
+        <div class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#download">Download</a>
+          <a href="#install">Build from source</a>
+          <a href="https://github.com/arunkarnann/aran-terminal">GitHub</a>
+        </div>
+      </div>
+    </nav>
+
+    <header>
+      <div class="wrap">
+        <span class="eyebrow">macOS · Tauri · Open Source</span>
+        <h1>Know which terminal<br /><span class="grad">actually needs you.</span></h1>
+        <p class="lede">
+          Aran Terminal is a lightweight, <strong>Rust-built</strong> terminal manager with a
+          focus dashboard, built for running many AI coding agents at once. It watches every
+          session and floats the one that's <strong>waiting on you</strong> to the top.
+        </p>
+        <div class="cta">
+          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg">Download .dmg — Apple Silicon</a>
+          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal">View on GitHub →</a>
+        </div>
+
+        <div class="term">
+          <div class="term-bar">
+            <span class="sq" style="background:#ff5f56"></span>
+            <span class="sq" style="background:#ffbd2e"></span>
+            <span class="sq" style="background:#27c93f"></span>
+            <span style="margin-left:0.5rem">Aran Terminal — focus dashboard</span>
+          </div>
+          <div class="term-body">
+            <div class="row"><span class="dot dot--run"></span> agent · refactor-api <span class="tag tag--run">RUNNING</span></div>
+            <div class="row"><span class="dot dot--wait"></span> agent · migrate-db <span class="tag tag--wait">WAITING — needs you</span></div>
+            <div class="row"><span class="dot dot--run"></span> agent · write-tests <span class="tag tag--run">RUNNING</span></div>
+            <div class="row"><span class="dot dot--idle"></span> shell · scratch <span class="tag tag--idle">IDLE</span></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section id="features">
+      <div class="wrap">
+        <h2>Built for a wall of agents</h2>
+        <p class="sub">Everything you need to run, watch, and stay focused across many sessions.</p>
+        <div class="grid">
+          <div class="card"><h3><span class="ic">◤</span>Attention detection</h3><p>A pure Rust engine reads the PTY stream and classifies each session RUNNING / IDLE / WAITING using OSC 133 markers plus an activity heuristic.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>Focus dashboard</h3><p>A "needs you" zone surfaces blocked sessions so you never hunt three tabs deep for the one asking a question.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>Real terminal</h3><p>xterm.js with the WebGL renderer over portable-pty. A full shell, not an emulated subset.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>Command blocks</h3><p>Warp-style per-command blocks with a status gutter, sticky header, and hover toolbar.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>Focus timer</h3><p>A Pomodoro-style focus/break loop with progress rings, a daily goal, and break prompts.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>History autofill</h3><p>Inline ghost suggestions drawn from your real command history as you type.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>Native notifications</h3><p>macOS alerts when a session finishes a long command or starts waiting on you.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>Themes &amp; sharp UI</h3><p>Dracula, Catppuccin, Tokyo Night, Nord, One Dark and more — in a fully squared, terminal-native interface.</p></div>
+          <div class="card"><h3><span class="ic">◤</span>Local-first</h3><p>SQLite (WAL) persistence via rusqlite. Your data never leaves your machine.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="download">
+      <div class="wrap">
+        <h2>Download</h2>
+        <p class="sub">macOS · Apple Silicon · ~4&nbsp;MB · MIT licensed.</p>
+        <div class="cta">
+          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg">Download Aran Terminal .dmg</a>
+          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases">All releases →</a>
+        </div>
+        <p class="note">
+          Open the <code>.dmg</code> and drag <strong>Aran Terminal</strong> into Applications. The build is
+          not yet notarized, so on first launch <strong>right-click the app → Open</strong> (or run
+          <code>xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"</code>) to get past
+          Gatekeeper. Apple-Silicon Macs only for now.
+        </p>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="wrap">
+        <h2>Build from source</h2>
+        <p class="sub">Requires macOS, the Rust toolchain, and Node.js 18+.</p>
+        <pre><span class="c"># clone and enter the app</span>
+git clone https://github.com/arunkarnann/aran-terminal.git
+<span class="p">cd</span> aran-terminal/conductor
+npm install
+
+<span class="c"># run in development (hot reload)</span>
+npm run tauri dev
+
+<span class="c"># or build a release .app / .dmg</span>
+npm run tauri build</pre>
+        <p class="note">
+          The release bundle lands in <code>conductor/src-tauri/target/release/bundle/</code>.
+          Aran Terminal currently targets <strong>macOS</strong> only.
+        </p>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap">
+        Aran Terminal · MIT Licensed · Built with
+        <a href="https://tauri.app">Tauri</a>, React &amp; Rust ·
+        <a href="https://github.com/arunkarnann/aran-terminal">Source on GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>

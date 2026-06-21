@@ -1,0 +1,30 @@
+# Internal planning / status docs (not published)
+.planning/
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Rust / Tauri build artifacts
+conductor/src-tauri/target/
+**/target/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.sw?
+
+# Logs
+logs/
+*.log
