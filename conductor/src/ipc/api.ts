@@ -89,6 +89,10 @@ export function getDailySummary(since: number, until: number): Promise<Summary> 
   return invoke<Summary>("get_daily_summary", { since, until });
 }
 
+export function resetStats(): Promise<void> {
+  return invoke("reset_stats");
+}
+
 export function getCommandHistory(
   search?: string,
   limit?: number,

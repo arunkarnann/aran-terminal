@@ -1,6 +1,6 @@
 //! Detection engine — the moat (PRD §6.1). Pure module over a byte stream: knows
 //! nothing about PTYs, Tauri, or the DB. Terminal-core feeds PTY chunks into
-//! `ingest`; a timer drives `tick` for the silence (T_wait) heuristic. The engine
+//! `ingest`; a timer drives `tick` for the prompt-quiet (T_wait) heuristic. The engine
 //! returns state transitions; the caller persists/emits them.
 //!
 //! This boundary (IMPLEMENTATION-PLAN.md §2.3) is what lets terminal-core (Agent A)

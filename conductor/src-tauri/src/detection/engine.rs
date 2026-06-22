@@ -1,13 +1,22 @@
-//! Per-session attention state machine (PRD §6.1). Combines three signals:
-//!   1. OSC 133 markers (primary, high confidence) — drives RUNNING/IDLE precisely.
-//!   2. Silence heuristic — a command that's executing (saw C, no D) and has gone
-//!      quiet for `t_wait` is blocked on input → WAITING.
-//!   3. Prompt-pattern match — a known blocking question shortens the wait to
-//!      `t_wait_pattern` and works even in degraded (no-OSC) mode.
+//! Per-session attention state machine (PRD §6.1).
 //!
-//! Design bias: precision over recall (PRD Principle 3). At an idle shell prompt,
-//! silence is NEVER WAITING — only an in-flight command (or a matched pattern in
-//! degraded mode) can be.
+//! WAITING requires POSITIVE evidence that the session is blocked on the user — a
+//! recognized blocking prompt (e.g. "(y/n)", "do you want to …") that has then gone
+//! quiet for `t_wait`. Pure silence is deliberately NOT enough: long-lived
+//! interactive programs (AI agents, REPLs, vim) keep the shell's command "in flight"
+//! (OSC 133 `C` with no matching `D`) for their entire lifetime and sit quietly
+//! whenever they are merely idle — so a silence-only rule flags every idle agent as
+//! WAITING. That was the dominant false-positive source.
+//!
+//! Signals:
+//!   1. OSC 133 markers — drive RUNNING/IDLE precisely and tell us whether a command
+//!      is in flight, which gates the prompt heuristic so a *bare shell prompt* is
+//!      never WAITING (its stale scrollback can't trip a match).
+//!   2. Prompt-pattern match — the sole trigger for WAITING. Works while a command
+//!      runs and in degraded (no-OSC) mode.
+//!
+//! Design bias: precision over recall (PRD Principle 3). The known cost is that a
+//! command blocked on a `read` with no recognizable prompt text won't be flagged.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -17,17 +26,16 @@ use super::{Detector, StateEvent};
 use crate::ipc::{AttentionState, SessionId, StateSource};
 
 pub struct DetectionConfig {
+    /// How long a recognized prompt must stay quiet before we flag WAITING.
     pub t_wait: Duration,
-    pub t_wait_pattern: Duration,
-    /// Lowercased blocking-question fragments (PRD §6.1 Signal 3). Conservative.
+    /// Lowercased blocking-question fragments (PRD §6.1 Signal 2). Conservative.
     pub patterns: Vec<String>,
 }
 
 impl Default for DetectionConfig {
     fn default() -> Self {
         DetectionConfig {
-            t_wait: Duration::from_secs(8),
-            t_wait_pattern: Duration::from_secs(2),
+            t_wait: Duration::from_secs(3),
             patterns: default_patterns(),
         }
     }
@@ -35,9 +43,10 @@ impl Default for DetectionConfig {
 
 fn default_patterns() -> Vec<String> {
     [
-        "(y/n)", "[y/n]", "[y/n]", "[y/n]", "(yes/no)", "do you want to",
-        "press enter to continue", "press any key", "overwrite?", "continue?",
-        "proceed?", "? [y", "? (y", "continue? [", "[y/n]:",
+        "(y/n)", "[y/n]", "[y/n]:", "(y/n/a)", "[y/n/a]", "(yes/no)", "y/n/all",
+        "do you want to", "press enter to continue", "press any key",
+        "overwrite?", "continue?", "proceed?", "? [y", "? (y", "continue? [",
+        "do you trust the files",
     ]
     .iter()
     .map(|s| s.to_lowercase())
@@ -126,6 +135,7 @@ impl Detector for DetectionEngine {
             .sessions
             .entry(session.clone())
             .or_insert_with(|| Sess::new(at));
+        let tail_before = s.tail.len();
         s.last_output = at;
 
         let markers = s.scanner.feed(bytes, &mut s.tail);
@@ -177,8 +187,10 @@ impl Detector for DetectionEngine {
             }
         }
 
-        // Recovery: fresh output means the process is alive again — clear WAITING.
-        if s.state == AttentionState::Waiting {
+        // Recovery: fresh *printable* output means the process is alive again — clear
+        // WAITING. Guard on printable growth so cursor-blink / redraw escape sequences
+        // (which carry no new content) don't flap the state back and forth.
+        if s.state == AttentionState::Waiting && s.tail.len() > tail_before {
             s.state = AttentionState::Running;
             events.push(ev(session, s.state, StateSource::Heuristic, false, None, None));
         }
@@ -203,25 +215,23 @@ impl Detector for DetectionEngine {
                 continue;
             }
             let silent = now.saturating_duration_since(s.last_output);
-            let pattern_hit = matches_pattern(&s.tail, &cfg.patterns);
 
-            // Pattern path: works while a command runs OR in degraded (no-OSC) mode.
-            let eligible_pattern =
-                pattern_hit && silent >= cfg.t_wait_pattern && (s.in_command || !s.has_osc133);
-            // Heuristic path: an in-flight command gone quiet. Idle prompts excluded.
-            let eligible_heuristic = s.in_command && silent >= cfg.t_wait;
+            // WAITING needs positive evidence: a recognized blocking prompt that has
+            // then gone quiet for `t_wait`. Pure silence is never enough (see module
+            // docs). The `in_command || !has_osc133` clause keeps a bare shell prompt
+            // out — at an idle prompt with OSC we're not in a command, so stale
+            // scrollback can't trip a match.
+            let eligible = matches_pattern(&s.tail, &cfg.patterns)
+                && silent >= cfg.t_wait
+                && (s.in_command || !s.has_osc133);
 
-            let source = if eligible_pattern {
-                Some(StateSource::Pattern)
-            } else if eligible_heuristic {
-                Some(StateSource::Heuristic)
-            } else {
-                None
-            };
-
-            if let Some(source) = source {
+            if eligible {
                 s.state = AttentionState::Waiting;
-                events.push(ev(id, s.state, source, false, None, None));
+                // Consume the matched prompt so an already-answered question (or a
+                // stale match in degraded mode) can't immediately re-trigger after
+                // recovery.
+                s.tail.clear();
+                events.push(ev(id, s.state, StateSource::Pattern, false, None, None));
             }
         }
         events
@@ -273,17 +283,35 @@ mod tests {
         assert_eq!(w[0].source, StateSource::Pattern);
     }
 
-    // AC2 variant: silent in-flight command with no known pattern -> heuristic WAITING at T_wait.
+    // The reported bug: a silent in-flight command with NO recognized prompt must NOT
+    // be flagged. Long-lived interactive programs (agents/REPLs/vim) keep a command
+    // in flight and sit quietly while merely idle — silence alone is never WAITING.
     #[test]
-    fn ac2_silent_command_goes_waiting_via_heuristic() {
+    fn silent_in_flight_command_without_prompt_is_not_waiting() {
         let mut e = engine();
         let t = Instant::now();
         e.ingest(&SID.into(), b"\x1b]133;C\x07", t);
         e.ingest(&SID.into(), b"working", t + Duration::from_secs(1));
-        assert!(e.tick(t + Duration::from_secs(5)).is_empty()); // <8s after last output
-        let w = e.tick(t + Duration::from_secs(10));
+        // Even far past any threshold, no prompt means no WAITING.
+        assert!(e.tick(t + Duration::from_secs(120)).is_empty());
+    }
+
+    // The same bug from the app's angle: an AI agent runs as a long-lived in-flight
+    // command (saw C, never D). Idle silence stays RUNNING; only a printed question
+    // flips it to WAITING.
+    #[test]
+    fn idle_long_lived_agent_only_waits_on_a_prompt() {
+        let mut e = engine();
+        let t = Instant::now();
+        e.ingest(&SID.into(), b"\x1b]133;C\x07", t); // `claude` launches; stays in-flight
+        e.ingest(&SID.into(), b"working on it\n", t + Duration::from_secs(1));
+        // 5 minutes idle: still RUNNING (no prompt printed).
+        assert!(e.tick(t + Duration::from_secs(300)).is_empty());
+        // Now it asks a real question.
+        e.ingest(&SID.into(), b"Do you want to proceed? ", t + Duration::from_secs(301));
+        let w = e.tick(t + Duration::from_secs(305));
         assert_eq!(states(&w), vec![AttentionState::Waiting]);
-        assert_eq!(w[0].source, StateSource::Heuristic);
+        assert_eq!(w[0].source, StateSource::Pattern);
     }
 
     // AC3: a session streaming continuous output is never marked WAITING.
@@ -339,31 +367,48 @@ mod tests {
         assert!(e.tick(t + Duration::from_secs(30)).is_empty());
     }
 
-    // Recovery: new output after WAITING returns the session to RUNNING.
+    // Recovery: real printable output after WAITING returns the session to RUNNING.
     #[test]
     fn recovery_new_output_clears_waiting() {
         let mut e = engine();
         let t = Instant::now();
         e.ingest(&SID.into(), b"\x1b]133;C\x07", t);
-        e.ingest(&SID.into(), b"working", t + Duration::from_secs(1));
+        e.ingest(&SID.into(), b"Proceed? (y/n) ", t + Duration::from_secs(1));
         assert_eq!(
-            states(&e.tick(t + Duration::from_secs(10))),
+            states(&e.tick(t + Duration::from_secs(5))),
             vec![AttentionState::Waiting]
         );
-        let back = e.ingest(&SID.into(), b"more output\n", t + Duration::from_secs(11));
+        let back = e.ingest(&SID.into(), b"more output\n", t + Duration::from_secs(6));
         assert_eq!(states(&back), vec![AttentionState::Running]);
+    }
+
+    // Recovery ignores content-free escape sequences (e.g. cursor blink) so a blocked
+    // prompt doesn't flap between WAITING and RUNNING.
+    #[test]
+    fn recovery_ignores_escape_only_output() {
+        let mut e = engine();
+        let t = Instant::now();
+        e.ingest(&SID.into(), b"\x1b]133;C\x07", t);
+        e.ingest(&SID.into(), b"Proceed? (y/n) ", t + Duration::from_secs(1));
+        assert_eq!(
+            states(&e.tick(t + Duration::from_secs(5))),
+            vec![AttentionState::Waiting]
+        );
+        // A bare cursor-move CSI carries no new content: stays WAITING.
+        let back = e.ingest(&SID.into(), b"\x1b[2G", t + Duration::from_secs(6));
+        assert!(back.is_empty());
     }
 
     #[test]
     fn t_wait_threshold_is_tunable() {
         let mut e = engine();
-        assert_eq!(e.t_wait_secs(), 8);
+        assert_eq!(e.t_wait_secs(), 3);
         e.set_t_wait_secs(20);
         assert_eq!(e.t_wait_secs(), 20);
 
-        // With a 20s threshold, a silent command at +10s must NOT be WAITING yet.
+        // With a 20s threshold, a prompt quiet for only 10s must NOT be WAITING yet.
         let t = Instant::now();
-        e.ingest(&SID.into(), b"\x1b]133;C\x07working", t);
+        e.ingest(&SID.into(), b"\x1b]133;C\x07Proceed? (y/n) ", t);
         assert!(e.tick(t + Duration::from_secs(10)).is_empty());
         let w = e.tick(t + Duration::from_secs(21));
         assert_eq!(states(&w), vec![AttentionState::Waiting]);

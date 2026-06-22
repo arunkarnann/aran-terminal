@@ -64,6 +64,7 @@ body {
   align-items: center;
   gap: 0.5rem;
   flex: none;
+  margin-left: auto;
 }
 
 .workspace {
@@ -693,6 +694,22 @@ body {
   background: var(--hoverBg);
 }
 
+.tab-reveal {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.15rem;
+  line-height: 1;
+  border-radius: var(--radius);
+}
+
+.tab-reveal:hover {
+  color: var(--text);
+  background: var(--hoverBg);
+}
+
 .tab-add {
   background: none;
   border: none;
@@ -821,6 +838,14 @@ body {
   background: var(--primaryHover);
 }
 
+.btn-danger {
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  color: var(--error);
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--error) 30%, transparent);
+}
+
 /* ---- Titlebar actions ---- */
 
 .titlebar-actions {
@@ -839,7 +864,10 @@ body {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.3rem;
+  width: 84px;
+  flex: none;
 }
 
 .tb-btn:hover {
@@ -898,12 +926,28 @@ body {
 /* ---- Dashboard ---- */
 
 .dashboard {
-  width: 320px;
   flex: none;
   background: var(--panel);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.resize-handle {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--primary);
+  opacity: 0.4;
 }
 
 /* ---- Bottom status bar (Zed-style) ------------------------------------- */
@@ -1171,7 +1215,6 @@ body {
 
 /* ---- Git panel (compact, Zed density) ---------------------------------- */
 .git-panel {
-  width: 300px;
   flex: none;
   background: var(--panel);
   border-left: 1px solid var(--border);
@@ -1179,6 +1222,7 @@ body {
   flex-direction: column;
   min-height: 0;
   font-size: 0.74rem;
+  position: relative;
 }
 
 .git-head {

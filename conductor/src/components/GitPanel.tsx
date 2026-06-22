@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { gitDiff, gitLog, gitRepos, gitShow, gitStatus } from "../ipc/api";
 import type { GitCommit, GitFileChange, GitRepo, GitStatus } from "../ipc/types";
+import { useResizable } from "../lib/useResizable";
 
 interface GitPanelProps {
   cwd: string | null;
@@ -31,6 +32,7 @@ export function GitPanel({ cwd, project, onClose }: GitPanelProps) {
   // which one the panel is currently showing.
   const [repos, setRepos] = useState<GitRepo[]>([]);
   const [repoPath, setRepoPath] = useState<string | null>(null);
+  const [gitWidth, handleProps] = useResizable("right", "conductor-git-width", 300, 220, 480);
 
   // Discover repos when the active terminal's directory changes. Keep the current
   // selection if it's still present; otherwise pick the cwd's own repo or the first.
@@ -119,7 +121,8 @@ export function GitPanel({ cwd, project, onClose }: GitPanelProps) {
     0;
 
   return (
-    <aside className="git-panel">
+    <aside className="git-panel" style={{ width: gitWidth }}>
+      <div className="resize-handle" {...handleProps} />
       <div className="git-head">
         <div className="git-title">
           <span className="git-glyph">⎇</span>

@@ -341,25 +341,26 @@ fn chunked_command_persists_to_db() {
 }
 
 #[test]
-fn live_blocking_read_goes_waiting() {
+fn live_blocking_read_prompt_goes_waiting() {
     if !Path::new("/bin/zsh").exists() {
         eprintln!("skipping: /bin/zsh not present");
         return;
     }
-    // `read foo` starts a command (OSC 133;C) then blocks silently — no OSC 133;D.
-    let bytes = run_zsh_capture(&["read foo"], 1200);
+    // A prompted `read` starts a command (OSC 133;C), prints its prompt, then blocks
+    // (no OSC 133;D). WAITING now requires that printed prompt — bare silence won't do.
+    let bytes = run_zsh_capture(&["read \"?Proceed? (y/n) \" foo"], 1200);
 
     let mut e = DetectionEngine::default();
     let sid = "live".to_string();
     let t = Instant::now();
     e.ingest(&sid, &bytes, t); // leaves the session mid-command (saw C, no D)
 
-    // After T_wait of silence the heuristic must flag the blocked command.
+    // After T_wait of silence the matched prompt must flag the blocked command.
     let w = e.tick(t + Duration::from_secs(9));
     let states: Vec<_> = w.iter().map(|x| x.state).collect();
     assert!(
         states.contains(&AttentionState::Waiting),
-        "blocked `read` did not become WAITING (got {states:?}); captured {} bytes",
+        "blocked prompted `read` did not become WAITING (got {states:?}); captured {} bytes",
         bytes.len()
     );
 }

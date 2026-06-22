@@ -451,7 +451,7 @@ pub fn spawn_mem_poller(mgr: Arc<Mutex<SessionManager>>) {
     });
 }
 
-/// Drives the silence heuristic (PRD §6.1 Signal 2): one tick per second, app-wide.
+/// Drives the prompt-quiet heuristic (PRD §6.1 Signal 2): one tick per second, app-wide.
 pub fn spawn_ticker(
     app: AppHandle,
     det: Arc<Mutex<DetectionEngine>>,

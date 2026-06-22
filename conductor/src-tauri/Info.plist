@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Shown when a command-line program run inside the terminal asks for the microphone.
+         Without this key macOS denies the request silently (no prompt). -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Aran Terminal needs microphone access so command-line tools you run in the terminal (voice recording, transcription, AI voice agents) can capture audio.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Aran Terminal needs camera access so command-line tools you run in the terminal can capture video.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Aran Terminal needs speech-recognition access so command-line tools you run in the terminal can transcribe speech.</string>
+</dict>
+</plist>

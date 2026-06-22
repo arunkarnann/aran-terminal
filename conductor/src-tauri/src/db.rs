@@ -97,6 +97,19 @@ pub fn mark_session_closed(conn: &Connection, id: &str, closed_at: i64) {
     );
 }
 
+/// On startup, close any sessions that were left open (app quit/crash without cleanup).
+/// Uses the last state_event timestamp, or created_at as fallback.
+pub fn reconcile_orphans(conn: &Connection) {
+    let _ = conn.execute(
+        "UPDATE session \
+         SET closed_at = COALESCE( \
+               (SELECT MAX(at) FROM state_event WHERE session_id = session.id), \
+               created_at) \
+         WHERE closed_at IS NULL",
+        [],
+    );
+}
+
 pub fn update_project(conn: &Connection, id: &str, path: &str, name: Option<&str>) {
     let _ = conn.execute(
         "UPDATE session SET project_path = ?2, project_name = ?3 WHERE id = ?1",
@@ -337,6 +350,17 @@ fn escape_like(s: &str) -> String {
     s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
+/// Purge all historical data (closed sessions, events, commands, focus blocks).
+/// Keeps currently-open sessions so live terminals aren't affected.
+pub fn reset_stats(conn: &Connection) {
+    let _ = conn.execute_batch(
+        "DELETE FROM state_event; \
+         DELETE FROM command; \
+         DELETE FROM focus_block; \
+         DELETE FROM session WHERE closed_at IS NOT NULL;",
+    );
+}
+
 /// Recent commands for the history view, newest first, optionally filtered by substring.
 pub fn command_history(conn: &Connection, search: Option<&str>, limit: i64) -> Vec<HistoryEntry> {
     let like = search.map(|s| format!("%{}%", escape_like(s)));
@@ -415,6 +439,69 @@ pub fn command_suggestions(
     out
 }
 
+/// Merge overlapping intervals and return total wall-clock duration.
+fn merge_intervals(intervals: &[(i64, i64)]) -> i64 {
+    if intervals.is_empty() {
+        return 0;
+    }
+    let mut sorted: Vec<(i64, i64)> = intervals.to_vec();
+    sorted.sort_unstable();
+    let mut total = 0i64;
+    let (mut cur_s, mut cur_e) = sorted[0];
+    for &(s, e) in &sorted[1..] {
+        if s <= cur_e {
+            cur_e = cur_e.max(e);
+        } else {
+            total += cur_e - cur_s;
+            cur_s = s;
+            cur_e = e;
+        }
+    }
+    total += cur_e - cur_s;
+    total
+}
+
+/// Per-project wall-clock time using interval union (no double-counting of concurrent sessions).
+fn compute_per_project_union(conn: &Connection, since: i64, until: i64) -> Vec<ProjectTime> {
+    let mut stmt = match conn.prepare(
+        "SELECT COALESCE(project_name, 'Unknown') AS p, \
+                max(created_at, ?1) AS s, \
+                min(COALESCE(closed_at, ?2), ?2) AS e \
+         FROM session \
+         WHERE created_at < ?2 AND COALESCE(closed_at, ?2) > ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map(params![since, until], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    });
+    let rows: Vec<(String, i64, i64)> = match rows {
+        Ok(r) => r.flatten().collect(),
+        Err(_) => return Vec::new(),
+    };
+    let mut map: std::collections::HashMap<String, Vec<(i64, i64)>> =
+        std::collections::HashMap::new();
+    for (project, s, e) in rows {
+        if e > s {
+            map.entry(project).or_default().push((s, e));
+        }
+    }
+    let mut out: Vec<ProjectTime> = map
+        .into_iter()
+        .map(|(project, intervals)| ProjectTime {
+            project,
+            active_ms: merge_intervals(&intervals),
+        })
+        .collect();
+    out.sort_unstable_by(|a, b| b.active_ms.cmp(&a.active_ms));
+    out
+}
+
 pub fn daily_summary(conn: &Connection, since: i64, until: i64, cap_overrides: i64) -> Summary {
     let sessions_opened = conn
         .query_row(
@@ -449,23 +536,7 @@ pub fn daily_summary(conn: &Connection, since: i64, until: i64, cap_overrides: i
         )
         .unwrap_or(0);
 
-    let mut per_project = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT COALESCE(project_name, 'Unknown') AS p, \
-                SUM(min(COALESCE(closed_at, ?2), ?2) - max(created_at, ?1)) AS ms \
-         FROM session \
-         WHERE created_at < ?2 AND COALESCE(closed_at, ?2) > ?1 \
-         GROUP BY p ORDER BY ms DESC",
-    ) {
-        if let Ok(rows) = stmt.query_map(params![since, until], |r| {
-            Ok(ProjectTime {
-                project: r.get::<_, String>(0)?,
-                active_ms: r.get::<_, i64>(1).unwrap_or(0),
-            })
-        }) {
-            per_project = rows.flatten().collect();
-        }
-    }
+    let per_project = compute_per_project_union(conn, since, until);
 
     Summary {
         since,
@@ -568,5 +639,23 @@ mod tests {
         insert_state_event(&c, "s1", AttentionState::Waiting, 4_000, StateSource::Pattern);
         let s = daily_summary(&c, 0, 10_000, 0);
         assert_eq!(s.agent_blocked_ms, 6_000);
+    }
+
+    #[test]
+    fn overlapping_sessions_union_not_sum() {
+        let db = DbState::memory().unwrap();
+        let c = db.0.lock().unwrap();
+        // Two sessions in the same project, overlapping: [0, 10000) and [2000, 8000).
+        insert_session(&c, "a", None, "/bin/zsh", 0, 1);
+        update_project(&c, "a", "/p", Some("proj"));
+        mark_session_closed(&c, "a", 10_000);
+        insert_session(&c, "b", None, "/bin/zsh", 2_000, 1);
+        update_project(&c, "b", "/p", Some("proj"));
+        mark_session_closed(&c, "b", 8_000);
+
+        let s = daily_summary(&c, 0, 10_000, 0);
+        assert_eq!(s.per_project.len(), 1);
+        // Union of [0,10000) and [2000,8000) = [0,10000) = 10000ms (not 16000).
+        assert_eq!(s.per_project[0].active_ms, 10_000);
     }
 }

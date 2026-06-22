@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getDailySummary } from "../ipc/api";
+import { getDailySummary, resetStats } from "../ipc/api";
 import type { Summary } from "../ipc/types";
 import { formatDuration } from "../lib/ui";
 
@@ -7,13 +7,22 @@ export function DailySummary({ onClose }: { onClose: () => void }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchSummary = () => {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     getDailySummary(start.getTime(), Date.now())
       .then(setSummary)
       .catch((e) => setError(String(e)));
+  };
+
+  useEffect(() => {
+    fetchSummary();
   }, []);
+
+  const handleReset = () => {
+    if (!confirm("Reset all historical stats? Open sessions are kept.")) return;
+    resetStats().then(fetchSummary).catch((e) => setError(String(e)));
+  };
 
   const maxMs = Math.max(1, ...(summary?.perProject.map((p) => p.activeMs) ?? [1]));
 
@@ -59,6 +68,9 @@ export function DailySummary({ onClose }: { onClose: () => void }) {
           </>
         )}
         <div className="dialog-actions">
+          <button className="btn btn-danger" onClick={handleReset}>
+            Reset stats
+          </button>
           <button className="btn btn-primary" onClick={onClose}>
             Done
           </button>

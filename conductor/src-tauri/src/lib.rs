@@ -37,6 +37,12 @@ pub fn run() {
             let mgr = app.state::<PtyState>().0.clone();
             let dbc = app.state::<DbState>().0.clone();
 
+            // Reconcile sessions left open from a prior run (quit/crash without cleanup).
+            {
+                let conn = dbc.lock().unwrap();
+                db::reconcile_orphans(&conn);
+            }
+
             // Auto-learn: import the user's existing shell history once, so suggestions
             // work from the first keystroke instead of waiting to build history in-app.
             {
@@ -56,7 +62,7 @@ pub fn run() {
                 det.lock().unwrap().set_t_wait_secs(secs);
             }
 
-            // Start the app-wide detection ticker (drives the silence heuristic).
+            // Start the app-wide detection ticker (drives the prompt-quiet heuristic).
             pty::spawn_ticker(app.handle().clone(), det, mgr.clone(), dbc);
             // Poll per-session memory usage.
             pty::spawn_mem_poller(mgr);
@@ -78,6 +84,7 @@ pub fn run() {
             commands::get_command_history,
             commands::get_command_suggestions,
             commands::get_daily_summary,
+            commands::reset_stats,
             commands::start_focus_block,
             commands::complete_focus_block,
             commands::abandon_focus_block,

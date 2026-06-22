@@ -16,6 +16,16 @@ a Rust core and a small WebView UI, shipping as a ~4 MB DMG.
 ![backend](https://img.shields.io/badge/backend-Rust-CE412B?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-success?style=flat-square)
 
+<br />
+
+### [⬇️ Download for macOS (Apple Silicon) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg)
+
+[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Apple%20Silicon)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg)
+
+<sub>~4 MB · macOS on Apple Silicon · not yet notarized — on first launch **right-click the app → Open**</sub>
+
+[Landing page](https://arunkarnann.github.io/aran-terminal/) · [All releases](https://github.com/arunkarnann/aran-terminal/releases)
+
 </div>
 
 ---

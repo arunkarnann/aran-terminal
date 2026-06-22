@@ -50,7 +50,7 @@ function themeBg(colors: { bg: string }): string {
 
 export function Settings({ cap, fontFamily, fontSize, onApplyCap, onFontChange, onSave, onClose }: SettingsProps) {
   const [draftCap, setDraftCap] = useState(cap);
-  const [waitSecs, setWaitSecs] = useState(8);
+  const [waitSecs, setWaitSecs] = useState(3);
   const { themeName, setTheme, availableThemes } = useTheme();
 
   // The font field edits a single family name; the stored value is a full stack.
@@ -133,8 +133,9 @@ export function Settings({ cap, fontFamily, fontSize, onApplyCap, onFontChange, 
           />
         </div>
         <p className="dialog-body">
-          How long a silent, running command waits before it's flagged as needing you.
-          Lower = more responsive; higher = fewer false alarms.
+          Once a session prints a prompt (e.g. a “(y/n)” question), how long it stays
+          quiet before it's flagged as needing you. Lower = more responsive; higher =
+          fewer false alarms.
         </p>
 
         <div className="setting-section-label">Terminal Font</div>

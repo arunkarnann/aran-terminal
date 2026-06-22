@@ -272,6 +272,11 @@ pub fn get_daily_summary(
     ))
 }
 
+#[tauri::command]
+pub fn reset_stats(db: State<DbState>) {
+    crate::db::reset_stats(&db.0.lock().unwrap());
+}
+
 // ---- Git inspection (active session's working directory) ----
 
 #[tauri::command]
