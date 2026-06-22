@@ -187,6 +187,30 @@ export function gitDiff(cwd: string, path: string, staged: boolean): Promise<str
   return invoke<string>("git_diff", { cwd, path, staged });
 }
 
+export function gitStage(cwd: string, paths: string[]): Promise<void> {
+  return invoke("git_stage", { cwd, paths });
+}
+
+export function gitUnstage(cwd: string, paths: string[]): Promise<void> {
+  return invoke("git_unstage", { cwd, paths });
+}
+
+export function gitCommit(cwd: string, message: string, all: boolean): Promise<string> {
+  return invoke<string>("git_commit", { cwd, message, all });
+}
+
+export function gitFetch(cwd: string): Promise<string> {
+  return invoke<string>("git_fetch", { cwd });
+}
+
+export function gitPull(cwd: string): Promise<string> {
+  return invoke<string>("git_pull", { cwd });
+}
+
+export function gitPush(cwd: string, setUpstream: boolean): Promise<string> {
+  return invoke<string>("git_push", { cwd, setUpstream });
+}
+
 // ---- Command --help flag explorer ----
 
 export function commandHelp(cwd: string, command: string): Promise<CommandHelp> {

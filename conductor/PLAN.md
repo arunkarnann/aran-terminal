@@ -1,146 +1,85 @@
-# Implementation Plan — Aran Terminal fixes
+# Implementation Plan — Git panel write actions
 
-Scoped per issue with exact files, root-cause findings, and approach. Intended to be
-handed to implementation agents working in parallel.
-
-> Note: `@tauri-apps/plugin-opener` is already installed, so no new backend command is
-> needed for the Finder reveal.
+Scoped with exact files and approach. Intended to be handed to an implementation agent.
 
 ---
 
-## Issue 1 — Per-tab "Open in Finder" button
-**Goal:** each terminal tab gets a button that reveals its working folder in Finder.
+## Git panel write actions (commit / push / fetch, VS Code–style)
+**Goal:** turn the read-only Git panel into a basic source-control surface — stage /
+unstage files, write a commit message and commit, and fetch / pull / push — like the
+VS Code or Zed git pane.
 
-- **File:** `src/components/TabStrip.tsx` (the `Tab` component, ~line 129–192). Add a
-  button next to `tab-close`. Mirror it into the `TabGroups`/vertical `Tab` variant if
-  grouped tabs should have it too.
-- **API:** use the already-installed JS plugin —
-  `import { revealItemInDir } from "@tauri-apps/plugin-opener"`. On click:
-  `if (session.cwd) revealItemInDir(session.cwd)`. Call `stopPropagation()` so it
-  doesn't switch/rename the tab.
-- **Permissions:** confirm `revealItemInDir` is allowed in
-  `src-tauri/capabilities/*.json` (opener permission
-  `opener:allow-reveal-item-in-dir`). If missing, add it — most likely gotcha.
-- **Disabled state:** `session.cwd` can be null before the first OSC-7 cwd arrives;
-  disable/hide the button until `cwd` is known.
-- **CSS:** add a `.tab-reveal` style mirroring `.tab-close` (`src/App.css` near 605+).
+### Current state
+`src-tauri/src/git.rs` is **read-only** (`repos`, `status`, `log`, `show`, `diff_file`)
+and its `run()` helper returns `Option<String>` — it **swallows stderr** and returns
+`None` on failure. The frontend `GitPanel.tsx` ("Changes" tab) only *opens diffs*; there
+are no stage/commit/sync controls. `status()` already returns `branch`, `ahead`,
+`behind`, `staged`, `unstaged`, `untracked`, so the header has the data it needs to gate
+buttons.
 
----
+### Backend — `src-tauri/src/git.rs`
+- Add a fallible runner that **captures stderr** so the UI can show real git errors
+  (e.g. "push rejected", "no upstream"):
+  ```rust
+  fn run_result(cwd: &str, args: &[&str]) -> Result<String, String> {
+      let out = Command::new("git").arg("-C").arg(cwd).args(args)
+          // Fail fast instead of hanging on a credential/passphrase prompt (no TTY).
+          .env("GIT_TERMINAL_PROMPT", "0")
+          .output().map_err(|e| e.to_string())?;
+      if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).into()) }
+      else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
+  }
+  ```
+- New functions (all keep the existing **argv discipline** — never a shell; pass file
+  paths after a `--` separator; pass the commit message as a single `-m <msg>` arg):
+  - `stage(cwd, paths: &[String])` → `git add -- <paths>`
+  - `unstage(cwd, paths: &[String])` → `git reset -q HEAD -- <paths>`
+  - `commit(cwd, message, all: bool)` → `git commit [-a] -m <message>`; reject an empty
+    message before shelling out.
+  - `fetch(cwd)` → `git fetch --all --prune`
+  - `pull(cwd)` → `git pull --ff-only` (surface a clear error if it can't fast-forward)
+  - `push(cwd, set_upstream: bool)` → `git push`; when there's no upstream, retry with
+    `push -u origin HEAD` (or expose `set_upstream` so the UI offers a "Publish branch").
+  - (optional) `discard(cwd, paths)` → `git restore -- <paths>` / `git checkout -- …`.
 
-## Issue 2 — Resizable side panels (Dashboard, Git, …)
-**Goal:** drag-resize the Dashboard and Git panels instead of fixed widths.
+### Commands / IPC plumbing
+- Add `#[tauri::command]` wrappers in `src-tauri/src/commands.rs`: `git_stage`,
+  `git_unstage`, `git_commit`, `git_fetch`, `git_pull`, `git_push`. Each returns
+  `Result<(), String>` (or `Result<String, String>` to bubble a success summary).
+- **Make the network commands async** (`#[tauri::command] async fn`) and run the
+  blocking git call on a worker (e.g. `tauri::async_runtime::spawn_blocking`) so a slow
+  fetch/push doesn't freeze the WebView. Consider a wall-clock timeout (kill the child
+  after ~30s) so a hung auth attempt can't wedge the panel.
+- Register all six in the `lib.rs` `invoke_handler!` list.
+- Add typed wrappers in `src/ipc/api.ts` and any shared types in `src/ipc/types.ts`.
 
-- **Current:** `.dashboard { width: 320px }` (`src/App.css:900`),
-  `.git-panel { min-width:360px; max-width:480px }` (~734). Both fixed.
-- **Approach:** add a thin drag handle on each panel's inner edge. Track width in React
-  state, persist to `localStorage` (`conductor-dashboard-width`, `conductor-git-width`),
-  clamp to min/max. Apply as inline `style={{ width }}` and drop the fixed CSS width.
-- **Files:** `src/components/Dashboard.tsx` (root `<aside className="dashboard">`,
-  line 65) and `src/components/GitPanel.tsx`. A small shared
-  `useResizable(side, key, min, max)` hook in `src/lib/` keeps both DRY (pointer events:
-  `pointerdown` on handle → `pointermove` delta → set width → `pointerup` persist).
-- **Gotcha:** the terminal (`xterm` + fit addon) must refit when panel width changes.
-  There's already a resize path in `TerminalView.tsx` — trigger a window `resize` event
-  (or the existing fit hook) on `pointerup`/width-change so the terminal reflows.
+### Frontend — `src/components/GitPanel.tsx`
+- **Sync bar** in `git-head` (next to branch/ahead-behind, ~line 145–152): three icon
+  buttons — **Fetch**, **Pull** (badge `↓behind`, disabled when `behind === 0`),
+  **Push** (badge `↑ahead`, disabled when `ahead === 0`). When `status.branch` has no
+  upstream, show **Publish** (calls push with `set_upstream`). Show a spinner + disable
+  while a sync runs; surface errors in a small `git-status-line`.
+- **Stage controls** in the "Changes" tab: a stage (`+`) action on each Unstaged /
+  Untracked row, an unstage (`−`) action on each Staged row, plus "Stage all" /
+  "Unstage all" group headers. (Keep the existing click-to-open-diff; put the
+  stage/unstage control as a separate button so the two don't collide.)
+- **Commit box** below the Changes list: a `<textarea>` for the message + a **Commit**
+  button (disabled when message is empty or `staged.length === 0`). Optional "Commit all"
+  toggle → `commit(all: true)`. On success, clear the box and `refresh()`.
+- After **every** mutating action call the existing `refresh()` so status / log / ahead /
+  behind update immediately (don't wait for the 5s interval).
 
----
+### Gotchas
+- **Auth/credential hangs** are the main risk: HTTPS or an SSH passphrase will prompt on
+  a TTY that doesn't exist here. `GIT_TERMINAL_PROMPT=0` + the timeout make it fail fast
+  with a readable error instead of hanging. Document that credential-helper / ssh-agent
+  setups are expected (we don't prompt for passwords in-app).
+- **Untracked vs unstaged**: untracked files come from `status.untracked` (strings), not
+  `GitFileChange` — staging them is still `git add -- <path>`, but the UI list is
+  separate (see `GitPanel.tsx:221`).
+- Renames in porcelain are tracked as the *new* path (already handled in `status()`),
+  so stage/unstage by that path works.
 
-## Issue 3 — Move Today / Settings / Dashboard into the tab row, fixed width
-**Goal:** relocate the action buttons into the terminal-tab section with consistent
-fixed-width buttons.
-
-- **Current:** `.topbar-actions` (Today, Settings, Group, Dashboard) sits in
-  `<header className="topbar">` beside `TabStrip` (`src/App.tsx:130–151`).
-- **Approach:** give `.tb-btn` a fixed width (e.g. `width: 84px; justify-content:center`)
-  in the `src/App.css:62` block so they stop reflowing. Keep `.topbar-actions` pinned
-  right (`margin-left:auto`) and **not** part of the horizontally-scrolling tab list, so
-  tabs scroll under a stable action cluster.
-- **Decision needed (small):** "terminal tab section" is ambiguous — confirm whether the
-  buttons should be (a) right-aligned on the same row as the tabs (minimal change,
-  recommended) or (b) inside the scrolling `.tab-strip` itself. Recommend (a).
-
----
-
-## Issue 4 — "Today only" stats + Reset button
-**Goal:** Today view shows only today (it already queries `todayMidnight → now`,
-`DailySummary.tsx:11–13` — correct) and gains a Reset.
-
-- **Reset button:** add to `DailySummary.tsx` `dialog-actions` (line 61). Needs a new
-  backend command `reset_stats` in `commands.rs` + registration in `lib.rs`
-  invoke_handler + a wrapper in `src/ipc/api.ts`.
-- **What reset does (pick one):**
-  - **Recommended:** purge *historical* rows that aren't live —
-    `DELETE FROM state_event; DELETE FROM command; DELETE FROM focus_block;
-    DELETE FROM session WHERE closed_at IS NOT NULL;` Keeps currently-open sessions,
-    wipes accumulated junk.
-  - Heavier: wipe everything and re-seed. Add a JS `confirm()` first — destructive.
-- Re-fetch the summary after reset so the dialog updates.
-
----
-
-## Issue 5 — The "arun = 616 hours" bug  ⭐ root cause confirmed
-Reproduced against the live DB
-(`~/Library/Application Support/studio.gearup.conductor/conductor.db`): project **arun**
-reports **616.7h today** from **45 sessions, 44 still `closed_at IS NULL`**. Two
-compounding defects:
-
-### 5a. Orphaned sessions never reconciled
-`mark_session_closed` only runs when a PTY reader thread ends (`pty.rs:238`). On app
-quit/crash the threads die without it, so `closed_at` stays NULL — 63 of 77 sessions are
-orphaned. The summary then counts each as "open until now."
-
-**Fix:** on startup, before any new session is created, reconcile. Add
-`db::reconcile_orphans(conn)` and call it in `lib.rs` `.setup()` right after `open_db`:
-
-```sql
-UPDATE session
-   SET closed_at = COALESCE(
-         (SELECT MAX(at) FROM state_event WHERE session_id = session.id),
-         created_at)
- WHERE closed_at IS NULL;
-```
-
-A session can't outlive the process that owned its PTY, so closing prior-run sessions at
-their last-activity time is correct. This alone drops the stale 44 out of *today's*
-window.
-
-### 5b. Per-project time SUMS concurrent sessions
-`db.rs:452–468` does `SUM(min(closed_at,until) - max(created_at,since))` grouped by
-project — so 5 terminals open in the same folder for 1h report 5h. That's the "adding up
-all the folders" you noticed.
-
-**Fix:** report the **wall-clock union** of session-open intervals per project, not the
-sum. Cleanest in Rust:
-`SELECT project, max(created_at,since) AS s, min(COALESCE(closed_at,until),until) AS e
-FROM session WHERE <overlaps window>`, then in `daily_summary` group by project, sort
-intervals by start, merge overlaps, sum merged durations. (Pure-SQL interval-union is
-possible but far less readable.)
-
-**Tests:** update `persists_and_summarizes` (`db.rs:486`) to assert union, and add a
-2-overlapping-sessions case proving no double-count.
-
-**Net effect:** 5a fixes the impossible totals (stale sessions leave today's window);
-5b fixes concurrent-session inflation. Both are needed.
-
----
-
-## Suggested order & ownership for parallel agents
-1. **Backend/data agent** → Issue 5 (5a + 5b) and Issue 4's `reset_stats` command. These
-   share `db.rs` — keep on one agent to avoid conflicts.
-2. **Frontend agent A** → Issue 1 (Finder) + Issue 3 (button layout). Both touch
-   `TabStrip.tsx` / `App.tsx` / `App.css`.
-3. **Frontend agent B** → Issue 2 (resizable panels) — isolated to `Dashboard.tsx`,
-   `GitPanel.tsx`, a new hook, `App.css`.
-
-**Decisions to confirm before starting:**
-- Issue 3 placement: right-aligned same row (recommended) vs. inside the scrolling strip.
-- Issue 4 reset scope: purge-historical (recommended) vs. full-wipe.
-
----
-
-## Already done (context, not a task)
-The WAITING detection accuracy fix is already implemented in
-`src-tauri/src/detection/engine.rs`: WAITING now requires a printed prompt pattern (no
-more pure-silence flagging of idle long-lived agents). Open follow-up: confirm the
-`default_patterns()` list covers the prompt strings of whichever agents are actually run
-(Claude Code's "Do you want to…" is covered).
+### Decision to confirm before starting
+- Commit default: commit staged only (standard, recommended) vs. expose a "Commit all"
+  that stages tracked changes too.

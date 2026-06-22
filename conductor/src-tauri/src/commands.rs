@@ -309,3 +309,41 @@ pub fn git_diff(cwd: String, path: String, staged: bool) -> Result<String, Strin
 pub fn command_help(cwd: String, command: String) -> crate::cmdhelp::CommandHelp {
     crate::cmdhelp::command_help(&cwd, &command)
 }
+
+// ---- Git write actions ----
+
+#[tauri::command]
+pub fn git_stage(cwd: String, paths: Vec<String>) -> Result<(), String> {
+    crate::git::stage(&cwd, &paths)
+}
+
+#[tauri::command]
+pub fn git_unstage(cwd: String, paths: Vec<String>) -> Result<(), String> {
+    crate::git::unstage(&cwd, &paths)
+}
+
+#[tauri::command]
+pub fn git_commit(cwd: String, message: String, all: bool) -> Result<String, String> {
+    crate::git::commit(&cwd, &message, all)
+}
+
+#[tauri::command]
+pub async fn git_fetch(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::git::fetch(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_pull(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::git::pull(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_push(cwd: String, set_upstream: bool) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::git::push(&cwd, set_upstream))
+        .await
+        .map_err(|e| e.to_string())?
+}

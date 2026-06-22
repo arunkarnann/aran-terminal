@@ -1,0 +1,51 @@
+name: Release
+
+# Build a signed macOS bundle, publish a GitHub Release, and generate the
+# `latest.json` manifest the in-app updater polls. Triggered by pushing a
+# version tag, e.g.  git tag v1.2.0 && git push origin v1.2.0
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write # tauri-action creates the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Universal binary so both Apple Silicon and Intel Macs get updates.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install frontend deps
+        working-directory: conductor
+        run: npm ci
+
+      - name: Build, release, and emit latest.json
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing key (NOT Apple notarization). Add these under
+          # repo Settings → Secrets and variables → Actions.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: conductor
+          tagName: ${{ github.ref_name }}
+          releaseName: "Aran Terminal ${{ github.ref_name }}"
+          releaseBody: "See the assets below to download and install."
+          # Publish immediately — a draft release won't resolve at
+          # releases/latest/download/latest.json (the updater would 404).
+          releaseDraft: false
+          prerelease: false
+          args: --target universal-apple-darwin

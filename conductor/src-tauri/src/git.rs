@@ -122,6 +122,23 @@ fn run(cwd: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Run `git -C <cwd> <args...>`, returning stdout on success or stderr on failure.
+/// Uses `GIT_TERMINAL_PROMPT=0` to fail fast on auth prompts (no TTY available).
+fn run_result(cwd: &str, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 fn is_repo(cwd: &str) -> bool {
     run(cwd, &["rev-parse", "--is-inside-work-tree"])
         .map(|s| s.trim() == "true")
@@ -272,6 +289,64 @@ pub fn diff_file(cwd: &str, path: &str, staged: bool) -> Result<String, String> 
     run(cwd, &args)
         .map(cap_diff)
         .ok_or_else(|| "git diff failed".into())
+}
+
+// ---- Write actions ----
+
+/// Stage files: `git add -- <paths>`.
+pub fn stage(cwd: &str, paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<&str> = vec!["add", "--"];
+    let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+    args.extend_from_slice(&refs);
+    run_result(cwd, &args).map(|_| ())
+}
+
+/// Unstage files: `git reset -q HEAD -- <paths>`.
+pub fn unstage(cwd: &str, paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<&str> = vec!["reset", "-q", "HEAD", "--"];
+    let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+    args.extend_from_slice(&refs);
+    run_result(cwd, &args).map(|_| ())
+}
+
+/// Commit staged changes (or all tracked with `all: true`).
+pub fn commit(cwd: &str, message: &str, all: bool) -> Result<String, String> {
+    let msg = message.trim();
+    if msg.is_empty() {
+        return Err("Commit message cannot be empty".into());
+    }
+    let mut args: Vec<&str> = vec!["commit"];
+    if all {
+        args.push("-a");
+    }
+    args.push("-m");
+    args.push(msg);
+    run_result(cwd, &args)
+}
+
+/// Fetch all remotes with prune.
+pub fn fetch(cwd: &str) -> Result<String, String> {
+    run_result(cwd, &["fetch", "--all", "--prune"])
+}
+
+/// Fast-forward pull (fails if not possible).
+pub fn pull(cwd: &str) -> Result<String, String> {
+    run_result(cwd, &["pull", "--ff-only"])
+}
+
+/// Push to remote. If `set_upstream` is true, adds `-u origin HEAD`.
+pub fn push(cwd: &str, set_upstream: bool) -> Result<String, String> {
+    if set_upstream {
+        run_result(cwd, &["push", "-u", "origin", "HEAD"])
+    } else {
+        run_result(cwd, &["push"])
+    }
 }
 
 /// Keep diffs to a sane size for the panel (~4000 lines).

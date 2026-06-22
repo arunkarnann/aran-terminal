@@ -191,8 +191,14 @@ pub fn create_session(
             created_at: now_ms(),
             name: None,
             state: AttentionState::Running,
-            cwd: None,
-            project: None,
+            // Seed from the spawn folder so the session is in the right project
+            // group from the first frame; OSC 7 refines this if the shell cd's.
+            project: cwd
+                .as_deref()
+                .map(|d| std::path::Path::new(d))
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned()),
+            cwd: cwd.clone(),
             command_count: 0,
             task_label: None,
             pid,

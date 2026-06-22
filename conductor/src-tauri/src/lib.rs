@@ -26,6 +26,8 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(PtyState::new())
         .manage(DetectionState::new())
         .setup(|app| {
@@ -99,6 +101,12 @@ pub fn run() {
             commands::git_log,
             commands::git_show,
             commands::git_diff,
+            commands::git_stage,
+            commands::git_unstage,
+            commands::git_commit,
+            commands::git_fetch,
+            commands::git_pull,
+            commands::git_push,
             commands::command_help,
         ])
         .run(tauri::generate_context!())

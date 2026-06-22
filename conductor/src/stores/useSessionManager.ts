@@ -86,8 +86,11 @@ export function useSessionManager() {
             ? {
                 ...s,
                 name: b.name ?? s.name,
-                project: b.project,
-                cwd: b.cwd,
+                // Keep the optimistic project/cwd until the backend has a real
+                // value (OSC 7). Otherwise the poll clobbers them with null and
+                // the tab briefly falls into the "Loose" group, then jumps back.
+                project: b.project ?? s.project,
+                cwd: b.cwd ?? s.cwd,
                 taskLabel: b.taskLabel,
                 commandCount: b.commandCount,
                 state: b.state,

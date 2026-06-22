@@ -8,6 +8,7 @@ import { StatusBar } from "./components/StatusBar";
 import { TabGroups } from "./components/TabGroups";
 import { TabStrip } from "./components/TabStrip";
 import { TerminalView } from "./components/TerminalView";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { useSessionManager } from "./stores/useSessionManager";
 import "./App.css";
 
@@ -113,6 +114,7 @@ function App() {
 
   return (
     <div className="app">
+      <UpdateBanner />
       <header className="topbar">
         {grouped ? (
           <div className="topbar-spacer" />

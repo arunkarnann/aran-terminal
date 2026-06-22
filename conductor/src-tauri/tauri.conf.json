@@ -21,9 +21,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/arunkarnann/aran-terminal/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIxMzMxRTg3Q0JFQjM2MkIKUldRck51dkxoeDR6c1cwdlpUT2NpS3pTVXhhOEZJbkl3NjJydGtiRWZ0ZmlOV2J6eEF0Wkx4YlcK"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
