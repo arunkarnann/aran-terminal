@@ -9,6 +9,23 @@
 
   <body>
     <div id="root"></div>
+    <!-- Block getUserMedia / getDisplayMedia in the webview so macOS never shows
+         a "allow microphone" permission popup.  CLI tools that need audio capture
+         talk to the OS directly through the PTY — the webview is just a renderer. -->
+    <script>
+      (function () {
+        var deny = function () { return Promise.reject(new DOMException('Permission denied', 'NotAllowedError')); };
+        if (navigator.mediaDevices) {
+          navigator.mediaDevices.getUserMedia = deny;
+          navigator.mediaDevices.getDisplayMedia = deny;
+        }
+        Object.defineProperty(navigator, 'mediaDevices', {
+          value: { getUserMedia: deny, getDisplayMedia: deny },
+          writable: false,
+          configurable: false,
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

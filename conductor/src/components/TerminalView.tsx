@@ -547,11 +547,34 @@ export function TerminalView({
     };
   }, [sessionId]);
 
+  // Drag-and-drop: write file paths into the terminal (like opencode/claude-code).
+  const handleDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  };
+  const handleDrop = (e: React.DragEvent) => {
+    if (!sessionId) return;
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    e.preventDefault();
+    const paths = files.map((f) => {
+      // Tauri delivers File objects whose .path is the POSIX path on macOS.
+      const p = (f as File & { path?: string }).path ?? f.name;
+      return p.includes(" ") || p.includes("'") || p.includes('"') ? `'${p.replace(/'/g, "'\\''")}'` : p;
+    });
+    void writeStdin(sessionId, paths.join(" "));
+    termRef.current?.focus();
+  };
+
   return (
     <div
       className={`terminal-host ${ageClass}`}
       style={{ display: visible ? "block" : "none" }}
       ref={hostRef}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       <div className="terminal-grid" />
       {project && (
