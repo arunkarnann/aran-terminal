@@ -174,6 +174,11 @@ export function TerminalView({
       fontSize: fsRef.current,
       cursorBlink: true,
       theme: toXtermTheme(theme.terminal),
+      // xterm's default is 1 line per wheel notch, which feels sluggish with a
+      // real mouse wheel. Scroll a few lines per notch, more with the fast
+      // modifier (Alt). Scrollback left at the default to keep per-session RAM low.
+      scrollSensitivity: 3,
+      fastScrollSensitivity: 5,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);

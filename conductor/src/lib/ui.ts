@@ -29,6 +29,19 @@ export function formatMem(kb: number | null | undefined): string {
   return `${Math.round(mb)} MB`;
 }
 
+/** How heavy a session's memory footprint is, escalating with RSS:
+ *  normal (<700MB) → high (≥700MB) → critical (≥1.2GB). */
+export type MemTier = "normal" | "high" | "critical";
+export const MEM_HIGH_KB = 700 * 1024; // 700 MB
+export const MEM_CRITICAL_KB = 1.2 * 1024 * 1024; // 1.2 GB
+
+export function memTier(kb: number | null | undefined): MemTier {
+  if (kb == null) return "normal";
+  if (kb >= MEM_CRITICAL_KB) return "critical";
+  if (kb >= MEM_HIGH_KB) return "high";
+  return "normal";
+}
+
 /** "25:00", "04:09", "1:02:30" — countdown/stopwatch clock, never negative. */
 export function formatCountdown(ms: number): string {
   if (ms < 0) ms = 0;

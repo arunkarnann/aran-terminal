@@ -636,6 +636,46 @@ body {
   font-size: 0.62rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tab-mem-warn {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+/* Memory climbing — amber, no longer muted so it reads at a glance. */
+.tab-mem--high {
+  color: var(--waiting);
+  font-weight: 600;
+}
+
+/* Critical footprint — red pill with a steady pulse so a heavy tab is
+   impossible to miss even when it isn't the active one. */
+.tab-mem--critical {
+  color: #fff;
+  font-weight: 700;
+  background: var(--error);
+  padding: 1px 5px;
+  border-radius: var(--radius);
+  animation: tab-mem-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes tab-mem-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--error) 60%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--error) 0%, transparent);
+  }
+}
+
+/* Tint the whole tab so the warning is visible from the strip, not just the badge. */
+.tab--mem-critical {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
 }
 
 .tab:hover {
