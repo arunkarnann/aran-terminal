@@ -1,8 +1,11 @@
 name: Release
 
-# Build a signed macOS bundle, publish a GitHub Release, and generate the
-# `latest.json` manifest the in-app updater polls. Triggered by pushing a
-# version tag, e.g.  git tag v1.2.0 && git push origin v1.2.0
+# Build signed macOS + Linux bundles, publish a GitHub Release, and generate the
+# `latest.json` manifest the in-app updater polls. Triggered by pushing a version
+# tag, e.g.  git tag v2.3.1 && git push origin v2.3.1
+#
+# tauri-action creates the release on the first matrix job to finish and appends
+# each platform's assets to it, merging every platform into one latest.json.
 on:
   push:
     tags:
@@ -10,9 +13,22 @@ on:
 
 jobs:
   release:
-    runs-on: macos-latest
     permissions:
       contents: write # tauri-action creates the GitHub Release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Universal macOS binary so both Apple Silicon and Intel Macs get updates.
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          # Linux x86_64 — produces .deb, .rpm and an updatable .AppImage.
+          # Built on 22.04 for the widest glibc compatibility of the AppImage.
+          - platform: ubuntu-22.04
+            args: ""
+            rust-targets: ""
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,8 +40,21 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Universal binary so both Apple Silicon and Intel Macs get updates.
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.rust-targets }}
+
+      # Tauri v2 Linux system dependencies (webkit2gtk 4.1, AppImage tooling, etc.).
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl wget file libssl-dev libxdo-dev
 
       - name: Install frontend deps
         working-directory: conductor
@@ -48,4 +77,4 @@ jobs:
           # releases/latest/download/latest.json (the updater would 404).
           releaseDraft: false
           prerelease: false
-          args: --target universal-apple-darwin
+          args: ${{ matrix.args }}

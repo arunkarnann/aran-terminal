@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "conductor"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "base64 0.22.1",
  "portable-pty",
