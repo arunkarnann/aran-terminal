@@ -10,7 +10,16 @@ import { TabStrip } from "./components/TabStrip";
 import { TerminalView } from "./components/TerminalView";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { useSessionManager } from "./stores/useSessionManager";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { writeStdin } from "./ipc/api";
 import "./App.css";
+
+// Shell-escape a dropped path so spaces/quotes survive being typed into the shell.
+function shellEscapePath(p: string): string {
+  return p.includes(" ") || p.includes("'") || p.includes('"')
+    ? `'${p.replace(/'/g, "'\\''")}'`
+    : p;
+}
 
 const DEFAULT_FONT_FAMILY = "Menlo, Monaco, 'SF Mono', monospace";
 const DEFAULT_FONT_SIZE = 13;
@@ -60,6 +69,39 @@ function App() {
 
   const waitingCount = mgr.sessions.filter((s) => s.state === "WAITING").length;
   const activeSession = mgr.sessions.find((s) => s.id === mgr.activeSessionId) ?? null;
+
+  // Keep the latest active session id available to the (once-registered) native
+  // drag-drop listener without re-subscribing on every tab switch.
+  const activeSessionIdRef = useRef(mgr.activeSessionId);
+  activeSessionIdRef.current = mgr.activeSessionId;
+
+  // App-wide file drag-and-drop. Uses Tauri's native drag-drop event, which hands
+  // us the dropped POSIX paths directly from the pasteboard — without WKWebView ever
+  // opening the files. The old HTML5 dataTransfer.files approach read each File
+  // object, forcing WKWebView to materialize media-library-backed items and firing
+  // an endless cascade of macOS Photos/Music/Finder privacy prompts. Paths are
+  // written into whichever terminal tab is currently active.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+        const id = activeSessionIdRef.current;
+        if (!id) return;
+        const paths = event.payload.paths;
+        if (!paths || paths.length === 0) return;
+        void writeStdin(id, paths.map(shellEscapePath).join(" "));
+      })
+      .then((u) => {
+        if (disposed) u();
+        else unlisten = u;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   // ⌘N opens a fresh terminal; ⌘T opens one in the active terminal's folder.
   useEffect(() => {
@@ -112,13 +154,47 @@ function App() {
     savedFontRef.current = { family: fontFamily, size };
   }, [fontFamily]);
 
+  const topbarActions = (
+    <div className="topbar-actions">
+      <button className="tb-btn" onClick={() => setShowSummary(true)}>
+        Today
+      </button>
+      <button className="tb-btn" onClick={openSettings}>
+        Settings
+      </button>
+      <button
+        className={`tb-btn ${grouped ? "tb-btn--on" : ""}`}
+        onClick={toggleGrouped}
+        title="Group tabs by folder"
+      >
+        Tab Group
+      </button>
+      <button
+        className={`tb-btn ${showDashboard ? "tb-btn--on" : ""}`}
+        onClick={() => setShowDashboard((v) => !v)}
+      >
+        Dashboard
+        {waitingCount > 0 && <span className="tb-badge">{waitingCount}</span>}
+      </button>
+    </div>
+  );
+
   return (
     <div className="app">
       <UpdateBanner />
-      <header className="topbar">
-        {grouped ? (
-          <div className="topbar-spacer" />
-        ) : (
+      {grouped ? (
+        // Grouped mode: the group tags share one row with the action buttons.
+        <TabGroups
+          sessions={mgr.sessions}
+          activeSessionId={mgr.activeSessionId}
+          onAdd={mgr.createSession}
+          onClose={mgr.closeSession}
+          onSwitch={mgr.switchSession}
+          onRename={mgr.renameSession}
+          actions={topbarActions}
+        />
+      ) : (
+        <header className="topbar">
           <TabStrip
             sessions={mgr.sessions}
             activeSessionId={mgr.activeSessionId}
@@ -127,41 +203,8 @@ function App() {
             onSwitch={mgr.switchSession}
             onRename={mgr.renameSession}
           />
-        )}
-
-        <div className="topbar-actions">
-          <button className="tb-btn" onClick={() => setShowSummary(true)}>
-            Today
-          </button>
-          <button className="tb-btn" onClick={openSettings}>
-            Settings
-          </button>
-          <button
-            className={`tb-btn ${grouped ? "tb-btn--on" : ""}`}
-            onClick={toggleGrouped}
-            title="Group tabs by folder"
-          >
-            Group
-          </button>
-          <button
-            className={`tb-btn ${showDashboard ? "tb-btn--on" : ""}`}
-            onClick={() => setShowDashboard((v) => !v)}
-          >
-            Dashboard
-            {waitingCount > 0 && <span className="tb-badge">{waitingCount}</span>}
-          </button>
-        </div>
-      </header>
-
-      {grouped && (
-        <TabGroups
-          sessions={mgr.sessions}
-          activeSessionId={mgr.activeSessionId}
-          onAdd={mgr.createSession}
-          onClose={mgr.closeSession}
-          onSwitch={mgr.switchSession}
-          onRename={mgr.renameSession}
-        />
+          {topbarActions}
+        </header>
       )}
 
       <div className="body">

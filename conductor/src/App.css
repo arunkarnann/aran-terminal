@@ -338,7 +338,7 @@ body {
 
 /* Per-tab uptime pill (e.g. "1m", "40m", "2h"), colored by age. */
 .tab-uptime {
-  font-size: 0.66rem;
+  font-size: 0.86rem;
   font-variant-numeric: tabular-nums;
   padding: 0.05rem 0.32rem;
   border-radius: var(--radius);
@@ -356,28 +356,10 @@ body {
   font-weight: 700;
 }
 
-/* Whole-terminal age ring drawn on top of the (opaque) canvas. */
-.terminal-host::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 3;
-  border: 2px solid transparent;
-  border-radius: var(--radius);
-  transition: border-color 0.4s ease, box-shadow 0.4s ease, background 0.4s ease;
-}
-.terminal-host--age-stale::after {
-  border-color: color-mix(in srgb, var(--waiting) 70%, transparent);
-  box-shadow: inset 0 0 12px color-mix(in srgb, var(--waiting) 22%, transparent);
-}
-.terminal-host--age-old::after {
-  border: 3px solid var(--error);
-  background: color-mix(in srgb, var(--error) 7%, transparent);
-  box-shadow:
-    inset 0 0 22px color-mix(in srgb, var(--error) 32%, transparent),
-    0 0 0 1px var(--error);
-}
+/* (Removed) The terminal pane used to draw an age ring that tinted the whole
+   terminal amber and then red as the session got older. Removed on request —
+   the terminal UI no longer changes color over time. Session age is still
+   visible on the tab's uptime pill. */
 
 /* ---- Command --help flag palette --------------------------------------- */
 .cmd-help-fab {
@@ -611,29 +593,29 @@ body {
   flex: 1;
   min-width: 0;
   padding: 0;
-  min-height: 2rem;
+  min-height: 2.6rem;
   overflow-x: auto;
 }
 
 .tab {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.8rem;
+  gap: 0.45rem;
+  padding: 0.4rem 0.8rem;
+  font-size: 1.04rem;
   cursor: pointer;
   border-right: 1px solid var(--border);
   user-select: none;
   white-space: nowrap;
-  min-width: 5rem;
-  max-width: 17rem;
+  min-width: 6.5rem;
+  max-width: 22rem;
   opacity: 0.55;
   transition: opacity 0.15s, background 0.15s;
 }
 
 .tab-mem {
   flex: none;
-  font-size: 0.62rem;
+  font-size: 0.8rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   display: inline-flex;
@@ -684,22 +666,26 @@ body {
 }
 
 .tab--active {
-  background: var(--bg);
+  /* Solid accent fill so the active tab reads as fully selected, not just tinted.
+     Slightly deepened so white text stays legible across themes. */
+  background: color-mix(in srgb, var(--primary) 88%, #000);
   opacity: 1;
   border-bottom: none;
   position: relative;
-  box-shadow: inset 0 2px 0 var(--primary), 0 -1px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 2px 0 var(--primary), 0 -1px 6px rgba(0, 0, 0, 0.28);
   z-index: 1;
 }
 
-.tab--active .tab-label {
-  color: var(--text);
+.tab--active .tab-label,
+.tab--active .tab-uptime,
+.tab--active .tab-mem {
+  color: #fff;
   font-weight: 600;
 }
 
 .tab-state-dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: var(--radius);
   flex: none;
 }
@@ -723,7 +709,7 @@ body {
   background: var(--bg);
   border: 1px solid var(--inputBorder);
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: 1.04rem;
   padding: 0.1rem 0.2rem;
   outline: none;
   min-width: 0;
@@ -734,8 +720,8 @@ body {
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 0.65rem;
-  padding: 0.1rem 0.15rem;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.2rem;
   line-height: 1;
   border-radius: var(--radius);
 }
@@ -750,8 +736,8 @@ body {
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 0.65rem;
-  padding: 0.1rem 0.15rem;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.2rem;
   line-height: 1;
   border-radius: var(--radius);
 }
@@ -766,8 +752,8 @@ body {
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 1.1rem;
-  padding: 0 0.7rem;
+  font-size: 1.4rem;
+  padding: 0 0.9rem;
   line-height: 1;
   border-right: 1px solid var(--border);
 }
@@ -909,25 +895,28 @@ body {
   background: none;
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 0.75rem;
-  padding: 0.2rem 0.6rem;
+  font-size: 0.98rem;
+  padding: 0.32rem 0.8rem;
   border-radius: var(--radius);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.3rem;
-  width: 84px;
+  gap: 0.4rem;
+  width: 108px;
   flex: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .tb-btn:hover {
   color: var(--text);
 }
 
+/* Selected/active button (Group or Dashboard when on): solid accent fill. */
 .tb-btn--on {
-  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 88%, #000);
   border-color: var(--primary);
+  color: #fff;
 }
 
 .tb-badge,
@@ -1125,8 +1114,8 @@ body {
 /* Editable per-project color swatch in a tab. */
 .tab-swatch {
   position: relative;
-  width: 11px;
-  height: 11px;
+  width: 14px;
+  height: 14px;
   border-radius: var(--radius);
   flex: none;
   cursor: pointer;
@@ -1149,10 +1138,10 @@ body {
   display: inline-flex;
   align-items: center;
   width: auto;
-  gap: 0.3rem;
-  padding: 0.45rem 0.85rem;
+  gap: 0.4rem;
+  padding: 0.6rem 1.1rem;
   margin-left: 0.4rem;
-  font-size: 0.86rem;
+  font-size: 1.12rem;
   font-weight: 500;
   line-height: 1;
   color: var(--primary);
@@ -1181,21 +1170,21 @@ body {
 .tab2-groups {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.45rem 0.6rem;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
 }
 .tab2-group {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.55rem;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
   border-radius: var(--radius);
-  padding: 0.45rem 0.85rem;
-  font-size: 0.86rem;
+  padding: 0.6rem 1.1rem;
+  font-size: 1.12rem;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -1204,20 +1193,49 @@ body {
 .tab2-group:hover {
   background: var(--hoverBg);
 }
+/* Per-group close (✕) — closes every tab in the group after confirmation. */
+.tab2-group-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0.1rem 0.25rem;
+  margin-left: 0.1rem;
+  border-radius: var(--radius);
+  opacity: 0.6;
+}
+.tab2-group-close:hover {
+  color: #fff;
+  background: var(--error);
+  opacity: 1;
+}
 .tab2-group--on {
-  background: var(--selectedBg);
-  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 88%, #000);
+  color: #fff;
   font-weight: 600;
 }
+.tab2-group--on .tab2-group-count {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.22);
+}
+.tab2-group--on .tab2-group-close {
+  color: rgba(255, 255, 255, 0.85);
+  opacity: 0.9;
+}
 .tab2-group-dot {
-  width: 10px;
-  height: 10px;
+  width: 13px;
+  height: 13px;
   border-radius: var(--radius);
   flex: none;
 }
 .tab2-group-count {
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.9rem;
   font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--muted) 18%, transparent);
   border-radius: var(--radius);
