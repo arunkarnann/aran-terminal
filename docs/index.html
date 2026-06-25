@@ -164,7 +164,7 @@
         <div class="nav-links">
           <a href="#features">Features</a>
           <a href="#download">Download</a>
-          <a href="#install">Build from source</a>
+          <a href="#install">Install</a>
           <a href="https://github.com/arunkarnann/aran-terminal">GitHub</a>
         </div>
       </div>
@@ -172,7 +172,7 @@
 
     <header>
       <div class="wrap">
-        <span class="eyebrow">macOS · Tauri · Open Source</span>
+        <span class="eyebrow">macOS &amp; Linux · Tauri · Open Source</span>
         <h1>Know which terminal<br /><span class="grad">actually needs you.</span></h1>
         <p class="lede">
           Aran Terminal is a lightweight, <strong>Rust-built</strong> terminal manager with a
@@ -222,16 +222,45 @@
     <section id="download">
       <div class="wrap">
         <h2>Download</h2>
-        <p class="sub">macOS · Apple Silicon · ~4&nbsp;MB · MIT licensed.</p>
+        <p class="sub">macOS &amp; Linux · MIT licensed.</p>
+
+        <h3 style="margin-top:1.5rem; font-size:1.1rem; color:var(--text);">macOS</h3>
         <div class="cta">
-          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg">Download Aran Terminal .dmg</a>
+          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg">Download .dmg — Apple Silicon</a>
           <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases">All releases →</a>
         </div>
         <p class="note">
           Open the <code>.dmg</code> and drag <strong>Aran Terminal</strong> into Applications. The build is
           not yet notarized, so on first launch <strong>right-click the app → Open</strong> (or run
           <code>xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"</code>) to get past
-          Gatekeeper. Apple-Silicon Macs only for now.
+          Gatekeeper.
+        </p>
+
+        <h3 style="margin-top:2.5rem; font-size:1.1rem; color:var(--text);">Linux</h3>
+        <div class="cta" style="margin-bottom:1rem;">
+          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.deb">Download .deb — Debian / Ubuntu</a>
+          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.AppImage">Download .AppImage — Any distro</a>
+        </div>
+        <div class="cta">
+          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal-2.3.1-1.x86_64.rpm">Download .rpm — Fedora / RHEL</a>
+          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases">All Linux releases →</a>
+        </div>
+
+        <pre style="margin-top:1.5rem;"><span class="c"># Debian / Ubuntu (.deb)</span>
+sudo dpkg -i Aran.Terminal_2.3.1_amd64.deb
+sudo apt-get install -f   <span class="c"># fix any missing deps</span>
+
+<span class="c"># Fedora / RHEL (.rpm)</span>
+sudo rpm -i Aran.Terminal-2.3.1-1.x86_64.rpm
+
+<span class="c"># Any distro (.AppImage)</span>
+chmod +x Aran.Terminal_2.3.1_amd64.AppImage
+./Aran.Terminal_2.3.1_amd64.AppImage</pre>
+        <p class="note">
+          On Ubuntu/Debian you also need the WebKit and GTK runtime libraries. If the <code>.deb</code>
+          install reports missing dependencies, run <code>sudo apt-get install -f</code> to pull them
+          automatically. For other distros, make sure <code>libwebkit2gtk-4.1</code>, <code>libgtk-3</code>,
+          and <code>libayatana-appindicator3</code> are installed.
         </p>
       </div>
     </section>
@@ -239,7 +268,7 @@
     <section id="install">
       <div class="wrap">
         <h2>Build from source</h2>
-        <p class="sub">Requires macOS, the Rust toolchain, and Node.js 18+.</p>
+        <p class="sub">Requires Rust toolchain and Node.js 18+.</p>
         <pre><span class="c"># clone and enter the app</span>
 git clone https://github.com/arunkarnann/aran-terminal.git
 <span class="p">cd</span> aran-terminal/conductor
@@ -248,11 +277,12 @@ npm install
 <span class="c"># run in development (hot reload)</span>
 npm run tauri dev
 
-<span class="c"># or build a release .app / .dmg</span>
+<span class="c"># or build a release bundle</span>
 npm run tauri build</pre>
         <p class="note">
           The release bundle lands in <code>conductor/src-tauri/target/release/bundle/</code>.
-          Aran Terminal currently targets <strong>macOS</strong> only.
+          On macOS this produces a <code>.app</code> and <code>.dmg</code>; on Linux it produces
+          <code>.deb</code>, <code>.rpm</code>, and <code>.AppImage</code> files.
         </p>
       </div>
     </section>

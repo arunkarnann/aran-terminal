@@ -5,12 +5,12 @@
 **A lightweight, Rust-built terminal manager with a focus dashboard for running many AI
 coding agents at once.**
 
-Aran Terminal is a fast, native macOS app — built on a **Rust** backend — that wraps a
+Aran Terminal is a fast, native desktop app — built on a **Rust** backend — that wraps a
 genuine PTY-backed terminal and *watches* each session to tell you which one actually needs
 you, so a wall of agent terminals stops being a wall of noise. It's deliberately lightweight:
-a Rust core and a small WebView UI, shipping as a ~4 MB DMG.
+a Rust core and a small WebView UI, shipping as a ~4 MB DMG on macOS.
 
-![platform](https://img.shields.io/badge/platform-macOS-000000?style=flat-square)
+![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-000000?style=flat-square)
 ![built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?style=flat-square)
 ![frontend](https://img.shields.io/badge/frontend-React%20%2B%20TypeScript-0A7EA4?style=flat-square)
 ![backend](https://img.shields.io/badge/backend-Rust-CE412B?style=flat-square)
@@ -23,6 +23,16 @@ a Rust core and a small WebView UI, shipping as a ~4 MB DMG.
 [![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Apple%20Silicon)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg)
 
 <sub>~4 MB · macOS on Apple Silicon · not yet notarized — on first launch **right-click the app → Open**</sub>
+
+### [⬇️ Download for Linux](https://github.com/arunkarnann/aran-terminal/releases/latest)
+
+[![Download .deb](https://img.shields.io/badge/Download-.deb%20(Debian%2FUbuntu)-E95420?style=for-the-badge&logo=debian&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.deb)
+[![Download .AppImage](https://img.shields.io/badge/Download-.AppImage%20(Any%20distro)-50fa7b?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.AppImage)
+[![Download .rpm](https://img.shields.io/badge/Download-.rpm%20(Fedora)-51A2DA?style=for-the-badge&logo=fedora&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal-2.3.1-1.x86_64.rpm)
+
+<sub>Debian/Ubuntu: `sudo dpkg -i Aran.Terminal_*.deb && sudo apt-get install -f`
+ · Fedora: `sudo rpm -i Aran.Terminal-*.rpm`
+ · Any distro: `chmod +x *.AppImage && ./Aran.Terminal_*.AppImage`</sub>
 
 [Landing page](https://arunkarnann.github.io/aran-terminal/) · [All releases](https://github.com/arunkarnann/aran-terminal/releases)
 
@@ -79,7 +89,7 @@ notifies you when a session goes quiet or asks a question.
 | Persistence  | SQLite (rusqlite, WAL mode)                                 |
 | Notifications| macOS Notification Center via notify-rust                   |
 
-> **Platform:** macOS only. The app relies on WKWebView and macOS notifications.
+> **Platform:** macOS and Linux. The app runs on macOS (WKWebView) and Linux (WebKitGTK).
 
 ## Repository layout
 
@@ -99,10 +109,22 @@ The app lives in the [`conductor/`](./conductor) subdirectory:
 
 ### Prerequisites
 
-- **macOS**
+- **macOS** or **Linux** (Ubuntu 22.04+, Fedora, Debian, or similar)
 - [Rust toolchain](https://www.rust-lang.org/tools/install) (stable)
 - [Node.js](https://nodejs.org) 18+
-- Xcode Command Line Tools (`xcode-select --install`)
+
+**macOS only:** Xcode Command Line Tools (`xcode-select --install`)
+
+**Linux only:** WebKit and GTK development libraries:
+```bash
+# Debian / Ubuntu
+sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+  librsvg2-dev patchelf build-essential curl wget file libssl-dev libxdo-dev
+
+# Fedora
+sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel \
+  librsvg2-devel patchelf openssl-devel libxdo-devel
+```
 
 ### Run in development
 
