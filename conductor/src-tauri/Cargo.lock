@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "conductor"
-version = "2.3.3"
+version = "2.3.5"
 dependencies = [
  "base64 0.22.1",
  "portable-pty",
