@@ -8,6 +8,17 @@
     "opener:default",
     "opener:allow-reveal-item-in-dir",
     "updater:default",
-    "process:default"
+    "process:default",
+    "shell:allow-open",
+    "shell:allow-execute",
+    "shell:allow-spawn",
+    "shell:allow-stdin-write",
+    "shell:allow-kill",
+    "shell:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-image",
+    "clipboard-manager:allow-write-image",
+    "clipboard-manager:default"
   ]
 }

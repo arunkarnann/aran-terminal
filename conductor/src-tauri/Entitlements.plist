@@ -2,17 +2,36 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Allow the app (and the CLI tools it launches) to use audio/video capture
-         devices under the hardened runtime. Required once the app is signed/notarized;
-         harmless on unsigned/ad-hoc builds. -->
+    <!-- Audio/Video capture for CLI tools (transcription, voice agents) -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
     <key>com.apple.security.device.camera</key>
     <true/>
-    <!-- Terminal launches arbitrary unsigned child binaries; allow that under hardened runtime. -->
+
+    <!-- Terminal launches arbitrary unsigned child binaries (node, python, etc.) -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Allow outbound network connections for child processes (Claude Code API calls,
+         npm, git, pip, etc.) Without this, hardened runtime blocks network access. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Allow inbound connections for local dev servers (e.g. npm run dev, Vite, webpack).
+         Child processes binding to localhost need this. -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- Allow file access when user explicitly selects files via drag-drop or Open panel.
+         This is the key entitlement that stops TCC from prompting on file drops. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Allow downloading files from the network into the app's container.
+         Needed when CLI tools fetch dependencies or assets. -->
+    <key>com.apple.security.files.downloads.read-write</key>
     <true/>
 </dict>
 </plist>

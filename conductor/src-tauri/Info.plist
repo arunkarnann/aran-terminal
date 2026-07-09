@@ -2,13 +2,36 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Shown when a command-line program run inside the terminal asks for the microphone.
-         Without this key macOS denies the request silently (no prompt). -->
+    <!-- Microphone: for CLI tools (transcription, voice agents) -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Aran Terminal needs microphone access so command-line tools you run in the terminal (voice recording, transcription, AI voice agents) can capture audio.</string>
+
+    <!-- Camera: for CLI tools (video capture) -->
     <key>NSCameraUsageDescription</key>
     <string>Aran Terminal needs camera access so command-line tools you run in the terminal can capture video.</string>
+
+    <!-- Speech recognition: for CLI tools -->
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Aran Terminal needs speech-recognition access so command-line tools you run in the terminal can transcribe speech.</string>
+
+    <!-- Desktop folder: when CLI tools need to read/write files on your Desktop -->
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Aran Terminal needs access to your Desktop so command-line tools you run in the terminal can read and write files there.</string>
+
+    <!-- Documents folder: when CLI tools need to read/write files in Documents -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Aran Terminal needs access to your Documents folder so command-line tools you run in the terminal can read and write files there.</string>
+
+    <!-- Downloads folder: when CLI tools need to read/write files in Downloads -->
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Aran Terminal needs access to your Downloads folder so command-line tools you run in the terminal can read and write files there.</string>
+
+    <!-- Network: allow CLI tools to make outbound connections (API calls, git, npm) -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Aran Terminal needs network access so command-line tools you run in the terminal can connect to the internet (APIs, git, package managers).</string>
+
+    <!-- Bluetooth: some dev tools use BLE for device communication -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Aran Terminal needs Bluetooth access so command-line tools you run in the terminal can communicate with nearby devices.</string>
 </dict>
 </plist>
