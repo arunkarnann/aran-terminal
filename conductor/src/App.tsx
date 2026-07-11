@@ -121,6 +121,13 @@ function App() {
     };
   }, []);
 
+  // Sync --zoom-factor CSS variable whenever font size changes so all rem-based
+  // UI text (dashboard, session cards, tabs, etc.) scales proportionally.
+  useEffect(() => {
+    const factor = fontSize / DEFAULT_FONT_SIZE;
+    document.documentElement.style.setProperty("--zoom-factor", String(factor));
+  }, [fontSize]);
+
   // ⌘N opens a fresh terminal; ⌘T opens one in the active terminal's folder.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -138,14 +145,42 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mgr, activeSession]);
 
+  const handleZoom = useCallback((size: number) => {
+    setFontSize(size);
+    persistFont(fontFamily, size);
+    savedFontRef.current = { family: fontFamily, size };
+  }, [fontFamily]);
+
+  // App-wide zoom: Cmd+= / Cmd+- / Cmd+0 on macOS, Ctrl variants on Linux.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((!e.metaKey && !e.ctrlKey) || e.altKey) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        handleZoom(Math.min(32, fontSize + 1));
+        return;
+      }
+      if (e.key === "-") {
+        e.preventDefault();
+        handleZoom(Math.max(8, fontSize - 1));
+        return;
+      }
+      if (e.key === "0") {
+        e.preventDefault();
+        handleZoom(DEFAULT_FONT_SIZE);
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fontSize, handleZoom]);
+
   const openSettings = useCallback(() => {
     savedFontRef.current = { family: fontFamily, size: fontSize };
     setShowSettings(true);
   }, [fontFamily, fontSize]);
 
   const closeSettings = useCallback(() => {
-    // Font changes apply-and-persist instantly (below), so there's nothing to
-    // revert on close — closing just dismisses the dialog.
     setShowSettings(false);
   }, []);
 
@@ -157,20 +192,12 @@ function App() {
     setShowSettings(false);
   }, []);
 
-  // Font edits behave like a text editor: applied to the terminal *and* persisted
-  // the instant they change, with no Save/Cancel dance. Mirrors handleZoom.
   const handleFontChange = useCallback((family: string, size: number) => {
     setFontFamily(family);
     setFontSize(size);
     persistFont(family, size);
     savedFontRef.current = { family, size };
   }, []);
-
-  const handleZoom = useCallback((size: number) => {
-    setFontSize(size);
-    persistFont(fontFamily, size);
-    savedFontRef.current = { family: fontFamily, size };
-  }, [fontFamily]);
 
   const topbarActions = (
     <div className="topbar-actions">
@@ -243,7 +270,6 @@ function App() {
               createdAt={s.createdAt}
               fontFamily={fontFamily}
               fontSize={fontSize}
-              onFontSizeChange={handleZoom}
             />
           ))}
         </main>

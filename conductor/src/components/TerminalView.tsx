@@ -25,10 +25,6 @@ import type { AttentionState, SessionId } from "../ipc/types";
 
 const MAX_SUGGESTIONS = 6;
 
-const MIN_FONT_SIZE = 8;
-const MAX_FONT_SIZE = 32;
-const ZOOM_STEP = 1;
-
 interface TerminalViewProps {
   sessionId: SessionId | null;
   visible: boolean;
@@ -38,7 +34,6 @@ interface TerminalViewProps {
   createdAt: number;
   fontFamily: string;
   fontSize: number;
-  onFontSizeChange: (size: number) => void;
 }
 
 interface GhostUI {
@@ -81,7 +76,6 @@ export function TerminalView({
   createdAt,
   fontFamily,
   fontSize,
-  onFontSizeChange,
 }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -90,7 +84,6 @@ export function TerminalView({
   const trackerRef = useRef<BlockTracker | null>(null);
   const ffRef = useRef(fontFamily);
   const fsRef = useRef(fontSize);
-  const onZoomRef = useRef(onFontSizeChange);
   const { theme } = useTheme();
 
   // Self-healing WebGL renderer loader, kept in a ref so both the init effect and
@@ -163,7 +156,6 @@ export function TerminalView({
   // Keep refs in sync with props.
   ffRef.current = fontFamily;
   fsRef.current = fontSize;
-  onZoomRef.current = onFontSizeChange;
 
   // Initialize xterm once.
   useEffect(() => {
@@ -209,31 +201,8 @@ export function TerminalView({
     });
     ro.observe(host);
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.metaKey) return;
-      const t = termRef.current;
-      if (!t) return;
-      if (e.key === "=" || e.key === "+") {
-        e.preventDefault();
-        onZoomRef.current(Math.min(MAX_FONT_SIZE, fsRef.current + ZOOM_STEP));
-        return;
-      }
-      if (e.key === "-") {
-        e.preventDefault();
-        onZoomRef.current(Math.max(MIN_FONT_SIZE, fsRef.current - ZOOM_STEP));
-        return;
-      }
-      if (e.key === "0") {
-        e.preventDefault();
-        onZoomRef.current(13);
-        return;
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-
     return () => {
       window.removeEventListener("resize", onWinResize);
-      window.removeEventListener("keydown", onKeyDown);
       if (roRaf != null) cancelAnimationFrame(roRaf);
       ro.disconnect();
       trackerRef.current?.dispose();

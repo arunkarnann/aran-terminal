@@ -2,7 +2,7 @@
 // row 2 is the tabs of the active group. The active group always follows the
 // active session; clicking another group tag jumps to that group's first tab.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { SessionId, SessionMeta } from "../ipc/types";
 import { Tab, TabGroup, groupSessions } from "./TabStrip";
 import { useNow } from "../lib/useNow";
@@ -34,6 +34,16 @@ export function TabGroups({
   const activeGroup =
     groups.find((g) => g.sessions.some((s) => s.id === activeSessionId)) ?? groups[0];
 
+  // Track the last active tab per group so switching back restores your place.
+  const lastActiveRef = useRef<Record<string, SessionId>>({});
+
+  useEffect(() => {
+    if (activeSessionId) {
+      const g = groups.find((gg) => gg.sessions.some((s) => s.id === activeSessionId));
+      if (g) lastActiveRef.current[g.key] = activeSessionId;
+    }
+  }, [activeSessionId, groups]);
+
   // Group pending confirmation to close (null = no dialog open).
   const [pendingClose, setPendingClose] = useState<TabGroup | null>(null);
 
@@ -59,7 +69,13 @@ export function TabGroups({
               className={`tab2-group ${active ? "tab2-group--on" : ""}`}
               style={active ? { boxShadow: `inset 0 -2px 0 ${color}` } : undefined}
               onClick={() => {
-                if (!active && g.sessions[0]) onSwitch(g.sessions[0].id);
+                if (active) return;
+                const lastId = lastActiveRef.current[g.key];
+                const targetId =
+                  lastId && g.sessions.some((s) => s.id === lastId)
+                    ? lastId
+                    : g.sessions[0]?.id;
+                if (targetId) onSwitch(targetId);
               }}
               title={g.cwd ?? g.project ?? "Loose"}
             >

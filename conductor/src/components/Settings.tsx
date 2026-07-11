@@ -205,7 +205,7 @@ export function Settings({ cap, fontFamily, fontSize, onApplyCap, onFontChange, 
         </div>
 
         <p className="dialog-body">
-          <kbd>Ctrl+=</kbd> / <kbd>Ctrl+-</kbd> to zoom in/out in the terminal. <kbd>Ctrl+0</kbd> resets to default.
+          <kbd>⌘=</kbd> / <kbd>⌘-</kbd> on macOS, <kbd>Ctrl+=</kbd> / <kbd>Ctrl+-</kbd> on Linux to zoom the entire UI. <kbd>⌘0</kbd> / <kbd>Ctrl+0</kbd> resets.
         </p>
 
         <div className="setting-section-label">Theme</div>
