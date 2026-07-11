@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getWaitThreshold, setWaitThreshold } from "../ipc/api";
+import { PermissionsSetup } from "./PermissionsSetup";
 import { useTheme } from "../themes/useTheme";
 import { buildStack, isFontAvailable, primaryFamily } from "../lib/fonts";
 
@@ -232,6 +233,9 @@ export function Settings({ cap, fontFamily, fontSize, onApplyCap, onFontChange, 
           Themes are JSON files in <code>src/themes/</code>. Drop a new{" "}
           <code>.json</code> file matching the schema to add your own.
         </p>
+
+        <div className="setting-section-label">macOS Permissions</div>
+        <PermissionsSetup embedded />
 
         <div className="setting-row setting-row--static">
           <span>Shell integration</span>

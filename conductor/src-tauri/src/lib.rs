@@ -15,6 +15,7 @@ pub mod detection;
 pub mod git;
 pub mod ipc;
 pub mod notify;
+pub mod permissions;
 pub mod pty;
 pub mod shell_integration;
 
@@ -110,6 +111,9 @@ pub fn run() {
             commands::git_pull,
             commands::git_push,
             commands::command_help,
+            permissions::check_full_disk_access,
+            permissions::open_full_disk_access_settings,
+            permissions::prime_folder_permissions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

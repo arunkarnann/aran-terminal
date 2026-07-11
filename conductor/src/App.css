@@ -853,6 +853,13 @@ body {
   justify-content: flex-end;
 }
 
+/* Left-aligned action row with trailing status text (PermissionsSetup). */
+.dialog-actions--start {
+  justify-content: flex-start;
+  align-items: center;
+  margin: 0.25rem 0 0.5rem;
+}
+
 .btn {
   background: var(--border);
   border: none;

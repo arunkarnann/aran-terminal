@@ -211,6 +211,26 @@ export function gitPush(cwd: string, setUpstream: boolean): Promise<string> {
   return invoke<string>("git_push", { cwd, setUpstream });
 }
 
+// ---- macOS permissions (issue #3: stop repeated TCC prompts) ----
+
+/** True when the app currently has Full Disk Access. Never triggers a prompt. */
+export function checkFullDiskAccess(): Promise<boolean> {
+  return invoke<boolean>("check_full_disk_access");
+}
+
+/** Deep-link System Settings → Privacy & Security → Full Disk Access. */
+export function openFullDiskAccessSettings(): Promise<void> {
+  return invoke("open_full_disk_access_settings");
+}
+
+/**
+ * Fire the Desktop/Documents/Downloads permission prompts up front (instead of
+ * scattered mid-work). Resolves with the folder names currently readable.
+ */
+export function primeFolderPermissions(): Promise<string[]> {
+  return invoke<string[]>("prime_folder_permissions");
+}
+
 // ---- Command --help flag explorer ----
 
 export function commandHelp(cwd: string, command: string): Promise<CommandHelp> {

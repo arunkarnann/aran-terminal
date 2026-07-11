@@ -22,7 +22,7 @@ a Rust core and a small WebView UI, shipping as a ~4 MB DMG on macOS.
 
 [![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Apple%20Silicon)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg)
 
-<sub>~4 MB · macOS on Apple Silicon · not yet notarized — on first launch **right-click the app → Open**</sub>
+<sub>~4 MB · macOS on Apple Silicon · not yet notarized — on first launch **right-click the app → Open** · maintainers: see [SIGNING.md](conductor/SIGNING.md) for how builds are signed so macOS permission grants persist</sub>
 
 ### [⬇️ Download for Linux](https://github.com/arunkarnann/aran-terminal/releases/latest)
 

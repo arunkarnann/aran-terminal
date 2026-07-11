@@ -3,6 +3,7 @@ import { CapDialog } from "./components/CapDialog";
 import { Dashboard } from "./components/Dashboard";
 import { DailySummary } from "./components/DailySummary";
 import { GitPanel } from "./components/GitPanel";
+import { PermissionsSetup } from "./components/PermissionsSetup";
 import { Settings } from "./components/Settings";
 import { StatusBar } from "./components/StatusBar";
 import { TabGroups } from "./components/TabGroups";
@@ -44,6 +45,23 @@ function App() {
   const [showGit, setShowGit] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // First-launch macOS permissions onboarding (issue #3) — shown once, always
+  // reachable later from Settings → macOS Permissions.
+  const [showPermsSetup, setShowPermsSetup] = useState(() => {
+    try {
+      return localStorage.getItem("conductor-perms-onboarded") !== "1";
+    } catch {
+      return false;
+    }
+  });
+  const dismissPermsSetup = useCallback(() => {
+    setShowPermsSetup(false);
+    try {
+      localStorage.setItem("conductor-perms-onboarded", "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
   const [grouped, setGrouped] = useState(() => {
     try {
       return localStorage.getItem("conductor-tab-group") === "1";
@@ -264,6 +282,22 @@ function App() {
         />
       )}
       {showSummary && <DailySummary onClose={() => setShowSummary(false)} />}
+      {showPermsSetup && (
+        <div className="dialog-overlay" onClick={dismissPermsSetup}>
+          <div className="dialog dialog--wide" onClick={(e) => e.stopPropagation()}>
+            <h2 className="dialog-title">One-time file access setup</h2>
+            <PermissionsSetup />
+            <div className="dialog-actions">
+              <button className="btn" onClick={dismissPermsSetup}>
+                Later
+              </button>
+              <button className="btn btn-primary" onClick={dismissPermsSetup}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showSettings && (
         <Settings
           cap={mgr.cap}

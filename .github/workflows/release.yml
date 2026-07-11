@@ -68,6 +68,17 @@ jobs:
           # repo Settings → Secrets and variables → Actions.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS codesigning identity (optional — see conductor/SIGNING.md).
+          # A STABLE signature is what makes macOS remember permission grants
+          # (Full Disk Access, folder access) across app updates; unsigned/ad-hoc
+          # builds reset all TCC grants on every release (issue #3).
+          # Set all three secrets together or none at all — an empty
+          # APPLE_SIGNING_IDENTITY can confuse the Tauri CLI. Works with a free
+          # self-signed cert today; swap in a Developer ID cert later (then also
+          # add APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID for notarization).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           projectPath: conductor
           tagName: ${{ github.ref_name }}

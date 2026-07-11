@@ -26,6 +26,18 @@
     <key>NSDownloadsFolderUsageDescription</key>
     <string>Aran Terminal needs access to your Downloads folder so command-line tools you run in the terminal can read and write files there.</string>
 
+    <!-- Photos library: when files are dragged out of Photos.app into the terminal -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Aran Terminal needs Photos access so images you drag from Photos into the terminal can be read by the command-line tools you run there.</string>
+
+    <!-- Removable volumes: when CLI tools read/write files on USB drives and SD cards -->
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Aran Terminal needs access to removable drives so command-line tools you run in the terminal can read and write files there.</string>
+
+    <!-- Network volumes: when CLI tools read/write files on network shares -->
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Aran Terminal needs access to network volumes so command-line tools you run in the terminal can read and write files there.</string>
+
     <!-- Network: allow CLI tools to make outbound connections (API calls, git, npm) -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>Aran Terminal needs network access so command-line tools you run in the terminal can connect to the internet (APIs, git, package managers).</string>
