@@ -12,6 +12,41 @@ import {
 } from "../ipc/api";
 import type { CapReachedEvent, SessionId, SessionMeta } from "../ipc/types";
 
+/** Given the session list before a close, choose which session to activate next. */
+function pickNextSession(
+  allSessions: UiSession[],
+  closedId: SessionId,
+  remaining: UiSession[],
+): SessionId | null {
+  if (remaining.length === 0) return null;
+
+  const closedIdx = allSessions.findIndex((s) => s.id === closedId);
+  if (closedIdx < 0) return remaining[0]?.id ?? null;
+
+  const closedSession = allSessions[closedIdx];
+
+  // 1. Prefer a sibling in the same project group (next, then previous, then first).
+  if (closedSession?.project) {
+    const sameProject = remaining.filter((s) => s.project === closedSession.project);
+    if (sameProject.length > 0) {
+      const projectSessions = allSessions.filter(
+        (s) => s.project === closedSession.project,
+      );
+      const projectIdx = projectSessions.findIndex((s) => s.id === closedId);
+      const nextInProject = projectSessions[projectIdx + 1]
+        ?? projectSessions[Math.max(0, projectIdx - 1)];
+      if (nextInProject && remaining.some((s) => s.id === nextInProject.id)) {
+        return nextInProject.id;
+      }
+      return sameProject[0].id;
+    }
+  }
+
+  // 2. Fallback: the session at the same position, or the last, or the first.
+  const nextIdx = Math.min(closedIdx, remaining.length - 1);
+  return (remaining[nextIdx] ?? remaining[remaining.length - 1] ?? remaining[0])?.id ?? null;
+}
+
 export interface CapDialogState {
   limit: number;
   current: number;
@@ -36,6 +71,11 @@ export function useSessionManager() {
   const [cap, setCap] = useState(5);
   const [capDialog, setCapDialog] = useState<CapDialogState | null>(null);
   const pendingCreateRef = useRef(false);
+  const sessionsRef = useRef(sessions);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   // Backend event subscriptions.
   useEffect(() => {
@@ -46,8 +86,13 @@ export function useSessionManager() {
           setCapDialog({ limit: e.limit, current: e.current });
         }),
         onSessionClosed((e) => {
-          setSessions((prev) => prev.filter((s) => s.id !== e.id));
-          setActiveSessionId((prev) => (prev === e.id ? null : prev));
+          const prevSessions = sessionsRef.current;
+          const remaining = prevSessions.filter((s) => s.id !== e.id);
+          setSessions(remaining);
+          setActiveSessionId((prev) => {
+            if (prev !== e.id) return prev;
+            return pickNextSession(prevSessions, e.id, remaining);
+          });
         }),
         onSessionState((e) => {
           setSessions((prev) =>
@@ -157,8 +202,13 @@ export function useSessionManager() {
 
   const closeSession = useCallback(async (id: SessionId) => {
     await apiCloseSession(id);
-    setSessions((prev) => prev.filter((s) => s.id !== id));
-    setActiveSessionId((prev) => (prev === id ? null : prev));
+    const prevSessions = sessionsRef.current;
+    const remaining = prevSessions.filter((s) => s.id !== id);
+    setSessions(remaining);
+    setActiveSessionId((prev) => {
+      if (prev !== id) return prev;
+      return pickNextSession(prevSessions, id, remaining);
+    });
   }, []);
 
   const switchSession = useCallback((id: SessionId) => {
