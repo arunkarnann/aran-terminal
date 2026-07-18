@@ -60,6 +60,40 @@ jobs:
         working-directory: conductor
         run: npm ci
 
+      # Import the signing cert into a keychain ourselves and mark it TRUSTED.
+      # Tauri's built-in import (via APPLE_CERTIFICATE) puts a self-signed cert
+      # into an untrusted temp keychain, where `security find-identity -v`
+      # reports it invalid — codesign then fails with "failed to resolve
+      # signing identity". Trusting the cert makes the identity valid, so we
+      # only hand APPLE_SIGNING_IDENTITY to tauri-action below.
+      - name: Import macOS signing certificate
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          # Trust the self-signed cert so it resolves as a valid identity.
+          security find-certificate -a -p "$KEYCHAIN_PATH" > "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+
+          rm "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
       - name: Build, release, and emit latest.json
         uses: tauri-apps/tauri-action@v0
         env:
@@ -72,12 +106,12 @@ jobs:
           # A STABLE signature is what makes macOS remember permission grants
           # (Full Disk Access, folder access) across app updates; unsigned/ad-hoc
           # builds reset all TCC grants on every release (issue #3).
-          # Set all three secrets together or none at all — an empty
-          # APPLE_SIGNING_IDENTITY can confuse the Tauri CLI. Works with a free
-          # self-signed cert today; swap in a Developer ID cert later (then also
-          # add APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID for notarization).
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # The cert itself is imported and trusted by the step above — do NOT
+          # also pass APPLE_CERTIFICATE here, or Tauri re-imports it into its
+          # own untrusted temp keychain and codesign fails to resolve the
+          # identity. Works with a free self-signed cert today; swap in a
+          # Developer ID cert later (then also add APPLE_ID / APPLE_PASSWORD /
+          # APPLE_TEAM_ID for notarization).
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           projectPath: conductor
