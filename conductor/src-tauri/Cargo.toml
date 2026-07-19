@@ -1,6 +1,6 @@
 [package]
 name = "conductor"
-version = "2.6.1"
+version = "2.7.0"
 description = "Aran Terminal — a terminal with a focus dashboard for managing AI coding-agent sessions"
 authors = ["Arun"]
 edition = "2021"
