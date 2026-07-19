@@ -5,8 +5,9 @@
 
 use tauri::{AppHandle, State};
 
+use base64::Engine;
 use crate::db::DbState;
-use crate::ipc::{FocusBlock, FocusDay, HistoryEntry, SessionId, SessionMeta, Summary};
+use crate::ipc::{FocusBlock, FocusDay, HistoryEntry, SessionId, SessionMeta, SessionSnapshot, SessionSnapshotWithScrollback, Summary};
 use crate::pty::{DetectionState, PtyState};
 
 /// Default daily focus goal when the user hasn't set one: 2 hours.
@@ -275,6 +276,91 @@ pub fn get_daily_summary(
 #[tauri::command]
 pub fn reset_stats(db: State<DbState>) {
     crate::db::reset_stats(&db.0.lock().unwrap());
+}
+
+// ---- Session restore (PRD §8.1) ----
+
+/// Persist a session snapshot (metadata + serialized xterm.js scrollback).
+/// Called periodically by the frontend and on app close.
+#[tauri::command]
+pub fn save_session_snapshot(
+    db: State<DbState>,
+    snapshot: SessionSnapshot,
+    scrollback_base64: Option<String>,
+) -> Result<(), String> {
+    let scrollback = scrollback_base64
+        .and_then(|b64| base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD, b64.as_bytes(),
+        ).ok());
+    crate::db::save_snapshot(
+        &db.0.lock().unwrap(),
+        &snapshot,
+        scrollback.as_deref(),
+        now_ms(),
+    );
+    Ok(())
+}
+
+/// Load all open snapshots (tabs to restore on launch).
+#[tauri::command]
+pub fn load_session_snapshots(
+    db: State<DbState>,
+) -> Result<Vec<SessionSnapshotWithScrollback>, String> {
+    let rows = crate::db::load_snapshots(&db.0.lock().unwrap());
+    Ok(rows
+        .into_iter()
+        .map(|(snap, sb)| {
+            let scrollback_base64 = sb.map(|bytes| {
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            });
+            SessionSnapshotWithScrollback {
+                snapshot: snap,
+                scrollback_base64,
+            }
+        })
+        .collect())
+}
+
+/// Load recently closed snapshots (for Cmd+Shift+T reopen).
+#[tauri::command]
+pub fn load_closed_snapshots(
+    db: State<DbState>,
+    limit: Option<i64>,
+) -> Result<Vec<SessionSnapshotWithScrollback>, String> {
+    let rows = crate::db::load_closed_snapshots(&db.0.lock().unwrap(), limit.unwrap_or(10));
+    Ok(rows
+        .into_iter()
+        .map(|(snap, sb)| {
+            let scrollback_base64 = sb.map(|bytes| {
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            });
+            SessionSnapshotWithScrollback {
+                snapshot: snap,
+                scrollback_base64,
+            }
+        })
+        .collect())
+}
+
+/// Mark a snapshot as closed (tab closed by user).
+#[tauri::command]
+pub fn close_session_snapshot(db: State<DbState>, session_id: SessionId) -> Result<(), String> {
+    crate::db::close_snapshot(&db.0.lock().unwrap(), &session_id, now_ms());
+    Ok(())
+}
+
+/// Reopen a closed snapshot (Cmd+Shift+T) so it appears in load_snapshots again.
+#[tauri::command]
+pub fn reopen_session_snapshot(db: State<DbState>, session_id: SessionId) -> Result<(), String> {
+    crate::db::reopen_snapshot(&db.0.lock().unwrap(), &session_id);
+    Ok(())
+}
+
+/// Delete a snapshot entirely.
+#[tauri::command]
+pub fn delete_session_snapshot(db: State<DbState>, session_id: SessionId) -> Result<(), String> {
+    crate::db::delete_snapshot(&db.0.lock().unwrap(), &session_id);
+    Ok(())
 }
 
 // ---- Git inspection (active session's working directory) ----

@@ -42,12 +42,6 @@ pub fn run() {
             let mgr = app.state::<PtyState>().0.clone();
             let dbc = app.state::<DbState>().0.clone();
 
-            // Reconcile sessions left open from a prior run (quit/crash without cleanup).
-            {
-                let conn = dbc.lock().unwrap();
-                db::reconcile_orphans(&conn);
-            }
-
             // Auto-learn: import the user's existing shell history once, so suggestions
             // work from the first keystroke instead of waiting to build history in-app.
             {
@@ -99,6 +93,12 @@ pub fn run() {
             commands::get_focus_goal,
             commands::set_focus_goal,
             commands::set_notification_focus,
+            commands::save_session_snapshot,
+            commands::load_session_snapshots,
+            commands::load_closed_snapshots,
+            commands::close_session_snapshot,
+            commands::reopen_session_snapshot,
+            commands::delete_session_snapshot,
             commands::git_repos,
             commands::git_status,
             commands::git_log,

@@ -19,6 +19,8 @@ import {
   type SessionClosedEvent,
   type SessionId,
   type SessionMeta,
+  type SessionSnapshot,
+  type SessionSnapshotWithScrollback,
   type StateEventPayload,
   type Summary,
 } from "./types";
@@ -163,6 +165,42 @@ export function setNotificationFocus(
   sessionId: SessionId | null,
 ): Promise<void> {
   return invoke("set_notification_focus", { sessionId });
+}
+
+// ---- Session restore (PRD §8.1) ----
+
+export function saveSessionSnapshot(
+  snapshot: SessionSnapshot,
+  scrollbackBase64?: string | null,
+): Promise<void> {
+  return invoke("save_session_snapshot", {
+    snapshot,
+    scrollbackBase64: scrollbackBase64 ?? null,
+  });
+}
+
+export function loadSessionSnapshots(): Promise<SessionSnapshotWithScrollback[]> {
+  return invoke<SessionSnapshotWithScrollback[]>("load_session_snapshots");
+}
+
+export function loadClosedSnapshots(
+  limit?: number,
+): Promise<SessionSnapshotWithScrollback[]> {
+  return invoke<SessionSnapshotWithScrollback[]>("load_closed_snapshots", {
+    limit: limit ?? null,
+  });
+}
+
+export function closeSessionSnapshot(sessionId: SessionId): Promise<void> {
+  return invoke("close_session_snapshot", { sessionId });
+}
+
+export function reopenSessionSnapshot(sessionId: SessionId): Promise<void> {
+  return invoke("reopen_session_snapshot", { sessionId });
+}
+
+export function deleteSessionSnapshot(sessionId: SessionId): Promise<void> {
+  return invoke("delete_session_snapshot", { sessionId });
 }
 
 // ---- Git inspection (active session's working directory) ----

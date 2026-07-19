@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { fontProbe, primaryFamily } from "../lib/fonts";
 import { ageTier } from "../lib/ui";
 import { useNow } from "../lib/useNow";
@@ -34,6 +35,18 @@ interface TerminalViewProps {
   createdAt: number;
   fontFamily: string;
   fontSize: number;
+  /** Serialized xterm.js state to restore (from previous session). */
+  initialScrollbackBase64?: string | null;
+  /** Called when the terminal is ready with its handle for snapshot persistence.
+   *  Stable reference — takes (sessionId, handle) so the parent can use a single
+   *  memoized callback instead of creating closures per render. */
+  onTerminalRef?: (sessionId: string, handle: TerminalHandle | null) => void;
+}
+
+/** Functions exposed to the parent for snapshot save/restore. */
+export interface TerminalHandle {
+  serialize: () => string | null;
+  writeScrollback: (b64: string) => void;
 }
 
 interface GhostUI {
@@ -76,11 +89,14 @@ export function TerminalView({
   createdAt,
   fontFamily,
   fontSize,
+  initialScrollbackBase64,
+  onTerminalRef,
 }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
+  const serializeRef = useRef<SerializeAddon | null>(null);
   const trackerRef = useRef<BlockTracker | null>(null);
   const ffRef = useRef(fontFamily);
   const fsRef = useRef(fontSize);
@@ -177,6 +193,12 @@ export function TerminalView({
     term.open(host.querySelector(".terminal-grid") as HTMLElement);
     loadWebglRef.current();
     fit.fit();
+
+    // Serialize addon for scrollback persistence (session restore).
+    const serialize = new SerializeAddon();
+    term.loadAddon(serialize);
+    serializeRef.current = serialize;
+
     termRef.current = term;
     fitRef.current = fit;
 
@@ -304,6 +326,39 @@ export function TerminalView({
     const term = termRef.current;
     const host = hostRef.current;
     if (!term || !host || !sessionId) return;
+
+    // ---- Session restore: register handle + apply initial scrollback ----
+    const serialize = serializeRef.current;
+    if (serialize && onTerminalRef) {
+      onTerminalRef(sessionId, {
+        serialize: () => {
+          try {
+            return serialize.serialize();
+          } catch {
+            return null;
+          }
+        },
+        writeScrollback: (b64: string) => {
+          try {
+            term.write(decodePtyBytes(b64));
+          } catch {
+            /* best-effort */
+          }
+        },
+      });
+    }
+    if (initialScrollbackBase64 && serialize) {
+      try {
+        // Write a visual divider before the restored content so the user can
+        // see where the previous session ended and the new one begins.
+        const divider = "\r\n\x1b[90m——— restored from previous session ———\x1b[0m\r\n";
+        term.write(divider);
+        term.write(decodePtyBytes(initialScrollbackBase64));
+      } catch {
+        /* best-effort restore */
+      }
+    }
+    // ---- end session restore ----
 
     const unlisteners: Array<() => void> = [];
     let disposed = false;
@@ -518,8 +573,9 @@ export function TerminalView({
       uiActiveRef.current = false;
       setGhost(null);
       setPanel(null);
+      if (onTerminalRef) onTerminalRef(sessionId, null);
     };
-  }, [sessionId]);
+  }, [sessionId, initialScrollbackBase64]);
 
   // Drag-and-drop of file paths into the terminal is handled app-wide via Tauri's
   // native drag-drop event (see App.tsx). We intentionally do NOT use HTML5

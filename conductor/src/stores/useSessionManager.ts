@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   closeSession as apiCloseSession,
+  closeSessionSnapshot,
   createSession as apiCreateSession,
+  deleteSessionSnapshot,
   listSessions,
+  loadSessionSnapshots,
   onCapReached,
   onSessionClosed,
   onSessionState,
@@ -72,6 +75,10 @@ export function useSessionManager() {
   const [capDialog, setCapDialog] = useState<CapDialogState | null>(null);
   const pendingCreateRef = useRef(false);
   const sessionsRef = useRef(sessions);
+  /** SessionId → serialized xterm.js scrollback (base64) for restore. */
+  const [restoreScrollbacks, setRestoreScrollbacks] = useState<
+    Map<SessionId, string>
+  >(new Map());
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -184,8 +191,9 @@ export function useSessionManager() {
     }
   }, []);
 
-  // Always open one terminal by default on launch (skip if the backend already
-  // has sessions, e.g. a dev hot-reload, so we don't spawn duplicates).
+  // On first mount: try to restore the previous session, falling back to a
+  // single fresh terminal. Skip if the backend already has live sessions
+  // (dev hot-reload) so we don't spawn duplicates.
   const autoOpenedRef = useRef(false);
   useEffect(() => {
     if (autoOpenedRef.current) return;
@@ -193,7 +201,53 @@ export function useSessionManager() {
     (async () => {
       try {
         const existing = await listSessions();
-        if (existing.length === 0) void createSession();
+        if (existing.length > 0) return; // hot-reload: sessions already live
+
+        // Check for persisted session snapshots.
+        const snaps = await loadSessionSnapshots();
+        if (snaps.length > 0) {
+          // Check restore-on-launch setting.
+          let restore = true;
+          try {
+            restore = localStorage.getItem("conductor-restore-on-launch") !== "0";
+          } catch {
+            /* default on */
+          }
+          if (restore) {
+            // Create sessions through the store so frontend state updates
+            // immediately. Track creation order so we can map each snapshot's
+            // scrollback to its newly-created session reliably.
+            const scrollbacks = new Map<SessionId, string>();
+            const prevCount = sessionsRef.current.length;
+            for (const s of snaps) {
+              await createSession(s.snapshot.cwd ?? undefined);
+              await new Promise((r) => setTimeout(r, 50));
+            }
+            // The restored sessions have fresh ids; the periodic auto-save and
+            // on-close flush persist them under those ids. Drop the consumed
+            // snapshots so the next launch doesn't restore them a second time.
+            for (const s of snaps) {
+              try { await deleteSessionSnapshot(s.snapshot.sessionId); } catch { /* non-critical */ }
+            }
+            // Map snapshot scrollbacks to new sessions by creation order:
+            // snaps[0] → sessions[prevCount], snaps[1] → sessions[prevCount+1], etc.
+            const mapScrollbacks = () => {
+              const current = sessionsRef.current;
+              for (let i = 0; i < snaps.length; i++) {
+                if (!snaps[i].scrollbackBase64) continue;
+                const session = current[prevCount + i];
+                if (session) scrollbacks.set(session.id, snaps[i].scrollbackBase64!);
+              }
+              if (scrollbacks.size > 0) setRestoreScrollbacks(new Map(scrollbacks));
+            };
+            // Try immediately, then after the first poll cycle as a fallback.
+            setTimeout(mapScrollbacks, 100);
+            setTimeout(mapScrollbacks, 2200);
+            return;
+          }
+        }
+        // No snapshots or restore disabled: create one fresh terminal.
+        void createSession();
       } catch {
         void createSession();
       }
@@ -202,6 +256,12 @@ export function useSessionManager() {
 
   const closeSession = useCallback(async (id: SessionId) => {
     await apiCloseSession(id);
+    try { await closeSessionSnapshot(id); } catch { /* non-critical */ }
+    setRestoreScrollbacks((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
     const prevSessions = sessionsRef.current;
     const remaining = prevSessions.filter((s) => s.id !== id);
     setSessions(remaining);
@@ -254,6 +314,7 @@ export function useSessionManager() {
     activeSessionId,
     cap,
     capDialog,
+    restoreScrollbacks,
     createSession,
     closeSession,
     switchSession,

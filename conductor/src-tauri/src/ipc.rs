@@ -152,3 +152,29 @@ pub struct HistoryEntry {
     pub duration_ms: Option<i64>,
     pub exit_code: Option<i32>,
 }
+
+/// Persisted session snapshot for restore-on-launch (PRD §8.1).
+/// The scrollback BLOB travels separately (not JSON-encoded).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSnapshot {
+    pub session_id: SessionId,
+    pub name: Option<String>,
+    pub project_path: Option<String>,
+    pub project_name: Option<String>,
+    pub task_label: Option<String>,
+    pub shell: String,
+    pub cwd: Option<String>,
+    pub tab_order: i32,
+    pub is_active: bool,
+    pub updated_at: i64,
+}
+
+/// A snapshot plus its serialized xterm.js scrollback (separate from JSON payload).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSnapshotWithScrollback {
+    pub snapshot: SessionSnapshot,
+    /// base64-encoded serialized xterm.js buffer, or null.
+    pub scrollback_base64: Option<String>,
+}

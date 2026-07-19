@@ -29,6 +29,8 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(include_str!("../migrations/0001_init.sql"))?;
     // Focus View — deep-work timers (additive migration).
     conn.execute_batch(include_str!("../migrations/0002_focus.sql"))?;
+    // Session restore — snapshot table for tab layout + scrollback persistence.
+    conn.execute_batch(include_str!("../migrations/0003_session_snapshot.sql"))?;
     // Seeded suggestions learned from the user's existing shell history (auto-learn).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS hist_seed (cmdline TEXT PRIMARY KEY, freq INTEGER NOT NULL DEFAULT 1);",
@@ -97,8 +99,139 @@ pub fn mark_session_closed(conn: &Connection, id: &str, closed_at: i64) {
     );
 }
 
+// ---- Session restore (PRD §8.1) ----
+
+use crate::ipc::SessionSnapshot;
+
+/// Upsert a session snapshot. Called periodically from the frontend with serialized
+/// xterm.js scrollback plus current metadata.
+pub fn save_snapshot(
+    conn: &Connection,
+    snap: &SessionSnapshot,
+    scrollback: Option<&[u8]>,
+    now: i64,
+) {
+    let _ = conn.execute(
+        "INSERT INTO session_snapshot \
+         (session_id, name, project_path, project_name, task_label, shell, cwd, \
+          tab_order, is_active, scrollback, updated_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) \
+         ON CONFLICT(session_id) DO UPDATE SET \
+           name=excluded.name, project_path=excluded.project_path, \
+           project_name=excluded.project_name, task_label=excluded.task_label, \
+           shell=excluded.shell, cwd=excluded.cwd, tab_order=excluded.tab_order, \
+           is_active=excluded.is_active, scrollback=excluded.scrollback, \
+           updated_at=excluded.updated_at",
+        params![
+            snap.session_id, snap.name, snap.project_path, snap.project_name,
+            snap.task_label, snap.shell, snap.cwd, snap.tab_order, snap.is_active,
+            scrollback, now,
+        ],
+    );
+}
+
+/// All open snapshots (active tabs that should be restored on launch), ordered by tab_order.
+pub fn load_snapshots(conn: &Connection) -> Vec<(SessionSnapshot, Option<Vec<u8>>)> {
+    let mut stmt = match conn.prepare(
+        "SELECT session_id, name, project_path, project_name, task_label, shell, cwd, \
+                tab_order, is_active, scrollback, updated_at \
+         FROM session_snapshot WHERE closed_at IS NULL ORDER BY tab_order",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            SessionSnapshot {
+                session_id: r.get(0)?,
+                name: r.get(1)?,
+                project_path: r.get(2)?,
+                project_name: r.get(3)?,
+                task_label: r.get(4)?,
+                shell: r.get(5)?,
+                cwd: r.get(6)?,
+                tab_order: r.get(7)?,
+                is_active: r.get(8)?,
+                updated_at: r.get(9)?,
+            },
+            r.get::<_, Option<Vec<u8>>>(10)?,
+        ))
+    });
+    rows.map(|r| r.flatten().collect()).unwrap_or_default()
+}
+
+/// Most recently closed snapshots, for Cmd+Shift+T reopen.
+pub fn load_closed_snapshots(conn: &Connection, limit: i64) -> Vec<(SessionSnapshot, Option<Vec<u8>>)> {
+    let mut stmt = match conn.prepare(
+        "SELECT session_id, name, project_path, project_name, task_label, shell, cwd, \
+                tab_order, is_active, scrollback, updated_at \
+         FROM session_snapshot WHERE closed_at IS NOT NULL \
+         ORDER BY closed_at DESC LIMIT ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map(params![limit], |r| {
+        Ok((
+            SessionSnapshot {
+                session_id: r.get(0)?,
+                name: r.get(1)?,
+                project_path: r.get(2)?,
+                project_name: r.get(3)?,
+                task_label: r.get(4)?,
+                shell: r.get(5)?,
+                cwd: r.get(6)?,
+                tab_order: r.get(7)?,
+                is_active: r.get(8)?,
+                updated_at: r.get(9)?,
+            },
+            r.get::<_, Option<Vec<u8>>>(10)?,
+        ))
+    });
+    rows.map(|r| r.flatten().collect()).unwrap_or_default()
+}
+
+/// Mark a snapshot as closed (the tab was explicitly closed, not just app quit).
+pub fn close_snapshot(conn: &Connection, session_id: &str, now: i64) {
+    let _ = conn.execute(
+        "UPDATE session_snapshot SET closed_at = ?2 WHERE session_id = ?1 AND closed_at IS NULL",
+        params![session_id, now],
+    );
+}
+
+/// Reopen a closed snapshot (Cmd+Shift+T) — clears closed_at so it shows up in load_snapshots.
+pub fn reopen_snapshot(conn: &Connection, session_id: &str) {
+    let _ = conn.execute(
+        "UPDATE session_snapshot SET closed_at = NULL, updated_at = ?2 WHERE session_id = ?1",
+        params![session_id, now_ms()],
+    );
+}
+
+/// Remove a single snapshot entirely.
+pub fn delete_snapshot(conn: &Connection, session_id: &str) {
+    let _ = conn.execute(
+        "DELETE FROM session_snapshot WHERE session_id = ?1",
+        params![session_id],
+    );
+}
+
+/// Remove all snapshots.
+pub fn clear_snapshots(conn: &Connection) {
+    let _ = conn.execute("DELETE FROM session_snapshot", []);
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// On startup, close any sessions that were left open (app quit/crash without cleanup).
-/// Uses the last state_event timestamp, or created_at as fallback.
+/// No longer called — replaced by the session_snapshot table which manages open/closed
+/// state through snapshot lifecycle. Kept for reference.
+#[allow(dead_code)]
 pub fn reconcile_orphans(conn: &Connection) {
     let _ = conn.execute(
         "UPDATE session \
@@ -350,14 +483,15 @@ fn escape_like(s: &str) -> String {
     s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
-/// Purge all historical data (closed sessions, events, commands, focus blocks).
+/// Purge all historical data (closed sessions, events, commands, focus blocks, snapshots).
 /// Keeps currently-open sessions so live terminals aren't affected.
 pub fn reset_stats(conn: &Connection) {
     let _ = conn.execute_batch(
         "DELETE FROM state_event; \
          DELETE FROM command; \
          DELETE FROM focus_block; \
-         DELETE FROM session WHERE closed_at IS NOT NULL;",
+         DELETE FROM session WHERE closed_at IS NOT NULL; \
+         DELETE FROM session_snapshot;",
     );
 }
 

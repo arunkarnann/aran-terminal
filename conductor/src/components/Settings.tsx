@@ -39,8 +39,10 @@ interface SettingsProps {
   cap: number;
   fontFamily: string;
   fontSize: number;
+  restoreOnLaunch: boolean;
   onApplyCap: (cap: number) => void;
   onFontChange: (family: string, size: number) => void;
+  onToggleRestoreOnLaunch: () => void;
   onSave: (family: string, size: number) => void;
   onClose: () => void;
 }
@@ -49,7 +51,7 @@ function themeBg(colors: { bg: string }): string {
   return colors.bg;
 }
 
-export function Settings({ cap, fontFamily, fontSize, onApplyCap, onFontChange, onSave, onClose }: SettingsProps) {
+export function Settings({ cap, fontFamily, fontSize, restoreOnLaunch, onApplyCap, onFontChange, onToggleRestoreOnLaunch, onSave, onClose }: SettingsProps) {
   const [draftCap, setDraftCap] = useState(cap);
   const [waitSecs, setWaitSecs] = useState(3);
   const { themeName, setTheme, availableThemes } = useTheme();
@@ -137,6 +139,21 @@ export function Settings({ cap, fontFamily, fontSize, onApplyCap, onFontChange, 
           Once a session prints a prompt (e.g. a “(y/n)” question), how long it stays
           quiet before it's flagged as needing you. Lower = more responsive; higher =
           fewer false alarms.
+        </p>
+
+        <div className="setting-row">
+          <label htmlFor="restore">Restore tabs on launch</label>
+          <button
+            id="restore"
+            className={`tb-btn ${restoreOnLaunch ? "tb-btn--on" : ""}`}
+            onClick={onToggleRestoreOnLaunch}
+          >
+            {restoreOnLaunch ? "On" : "Off"}
+          </button>
+        </div>
+        <p className="dialog-body">
+          Reopen all tabs and their scrollback from the last session when the app
+          starts. Running shell processes are not restored — only layout and history.
         </p>
 
         <div className="setting-section-label">Terminal Font</div>

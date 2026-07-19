@@ -8,11 +8,18 @@ import { Settings } from "./components/Settings";
 import { StatusBar } from "./components/StatusBar";
 import { TabGroups } from "./components/TabGroups";
 import { TabStrip } from "./components/TabStrip";
-import { TerminalView } from "./components/TerminalView";
+import { TerminalView, type TerminalHandle } from "./components/TerminalView";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { useSessionManager } from "./stores/useSessionManager";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { writeStdin } from "./ipc/api";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  writeStdin,
+  saveSessionSnapshot,
+  loadClosedSnapshots,
+  deleteSessionSnapshot,
+} from "./ipc/api";
+import type { SessionSnapshot } from "./ipc/types";
 import "./App.css";
 
 // Shell-escape a dropped path so spaces/quotes survive being typed into the shell.
@@ -87,6 +94,137 @@ function App() {
 
   const waitingCount = mgr.sessions.filter((s) => s.state === "WAITING").length;
   const activeSession = mgr.sessions.find((s) => s.id === mgr.activeSessionId) ?? null;
+
+  // ---- Session restore: terminal handle registry ----
+  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
+  const sessionsRefForSave = useRef(mgr.sessions);
+  useEffect(() => { sessionsRefForSave.current = mgr.sessions; }, [mgr.sessions]);
+
+  const onTerminalRef = useCallback(
+    (sessionId: string, handle: TerminalHandle | null) => {
+      if (handle) {
+        terminalRefs.current.set(sessionId, handle);
+      } else {
+        terminalRefs.current.delete(sessionId);
+      }
+    },
+    [],
+  );
+
+  // Build a SessionSnapshot for a given UiSession.
+  const buildSnapshot = useCallback(
+    (s: typeof mgr.sessions[number], idx: number): SessionSnapshot => ({
+      sessionId: s.id,
+      name: s.name,
+      projectPath: s.cwd,
+      projectName: s.project,
+      taskLabel: s.taskLabel,
+      shell: s.shell || "",
+      cwd: s.cwd,
+      tabOrder: idx,
+      isActive: s.id === mgr.activeSessionId,
+      updatedAt: Date.now(),
+    }),
+    [mgr.activeSessionId],
+  );
+
+  /** Base64-encode a raw UTF-8 string (handles ANSI escapes). */
+  const encodeScrollback = useCallback((raw: string): string => {
+    const bytes = new TextEncoder().encode(raw);
+    const bin = Array.from(bytes, (b) => String.fromCharCode(b)).join("");
+    return btoa(bin);
+  }, []);
+
+  // Auto-save: every 30s, serialize all xterm.js buffers and persist snapshots.
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const sessions = sessionsRefForSave.current;
+      if (sessions.length === 0) return;
+      for (let i = 0; i < sessions.length; i++) {
+        const s = sessions[i];
+        const handle = terminalRefs.current.get(s.id);
+        const raw = handle?.serialize();
+        void saveSessionSnapshot(
+          buildSnapshot(s, i),
+          raw ? encodeScrollback(raw) : null,
+        );
+      }
+    }, 30_000);
+    return () => clearInterval(iv);
+  }, [buildSnapshot, encodeScrollback]);
+
+  // Save all snapshots on window close (graceful shutdown).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow()
+      .onCloseRequested(async () => {
+        const sessions = sessionsRefForSave.current;
+        for (let i = 0; i < sessions.length; i++) {
+          const s = sessions[i];
+          const handle = terminalRefs.current.get(s.id);
+          const raw = handle?.serialize();
+          try {
+            await saveSessionSnapshot(
+              buildSnapshot(s, i),
+              raw ? encodeScrollback(raw) : null,
+            );
+          } catch {
+            /* best-effort on close */
+          }
+        }
+      })
+      .then((u) => { unlisten = u; });
+    return () => { unlisten?.(); };
+  }, [buildSnapshot, encodeScrollback]);
+
+  // Store restore-on-launch preference.
+  const [restoreOnLaunch, setRestoreOnLaunch] = useState(() => {
+    try {
+      return localStorage.getItem("conductor-restore-on-launch") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const toggleRestoreOnLaunch = useCallback(() => {
+    setRestoreOnLaunch((v) => {
+      const n = !v;
+      try {
+        localStorage.setItem("conductor-restore-on-launch", n ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return n;
+    });
+  }, []);
+
+  // Cmd+Shift+T: reopen the most recently closed tab.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.metaKey || !e.shiftKey || e.altKey || e.ctrlKey) return;
+      if (e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        (async () => {
+          try {
+            const closed = await loadClosedSnapshots(1);
+            if (closed.length > 0) {
+              const snap = closed[0];
+              // Create a fresh session and delete the old snapshot so it
+              // doesn't cause a duplicate on next restore.
+              await deleteSessionSnapshot(snap.snapshot.sessionId);
+              void mgr.createSession(snap.snapshot.cwd ?? undefined);
+              // The new session gets its scrollback via restoreScrollbacks
+              // if we re-add the snapshot — but since we deleted it, the
+              // re-opened tab starts fresh with the right cwd.
+            }
+          } catch {
+            /* ignore */
+          }
+        })();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mgr]);
 
   // Keep the latest active session id available to the (once-registered) native
   // drag-drop listener without re-subscribing on every tab switch.
@@ -270,6 +408,10 @@ function App() {
               createdAt={s.createdAt}
               fontFamily={fontFamily}
               fontSize={fontSize}
+              initialScrollbackBase64={
+                mgr.restoreScrollbacks.get(s.id) ?? null
+              }
+              onTerminalRef={onTerminalRef}
             />
           ))}
         </main>
@@ -329,8 +471,10 @@ function App() {
           cap={mgr.cap}
           fontFamily={fontFamily}
           fontSize={fontSize}
+          restoreOnLaunch={restoreOnLaunch}
           onApplyCap={mgr.applyCap}
           onFontChange={handleFontChange}
+          onToggleRestoreOnLaunch={toggleRestoreOnLaunch}
           onSave={saveSettings}
           onClose={closeSettings}
         />

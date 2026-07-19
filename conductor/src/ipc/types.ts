@@ -89,6 +89,26 @@ export interface HistoryEntry {
   exitCode: number | null;
 }
 
+// ---- Session restore (PRD §8.1) ----
+
+export interface SessionSnapshot {
+  sessionId: SessionId;
+  name: string | null;
+  projectPath: string | null;
+  projectName: string | null;
+  taskLabel: string | null;
+  shell: string;
+  cwd: string | null;
+  tabOrder: number;
+  isActive: boolean;
+  updatedAt: number;
+}
+
+export interface SessionSnapshotWithScrollback {
+  snapshot: SessionSnapshot;
+  scrollbackBase64: string | null;
+}
+
 export interface Summary {
   since: number;
   until: number;
