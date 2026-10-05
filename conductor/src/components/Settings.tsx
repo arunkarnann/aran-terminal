@@ -3,6 +3,7 @@ import { getWaitThreshold, setWaitThreshold } from "../ipc/api";
 import { PermissionsSetup } from "./PermissionsSetup";
 import { useTheme } from "../themes/useTheme";
 import { buildStack, isFontAvailable, primaryFamily } from "../lib/fonts";
+import { IconX } from "./Icons";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
@@ -105,8 +106,13 @@ export function Settings({ cap, fontFamily, fontSize, restoreOnLaunch, onApplyCa
 
   return (
     <div className="dialog-overlay" onClick={onClose}>
-      <div className="dialog dialog--wide" onClick={(e) => e.stopPropagation()}>
-        <h2 className="dialog-title">Settings</h2>
+      <div className="dialog dialog--wide dialog--settings" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog-header">
+          <h2 className="dialog-title">Settings</h2>
+          <button className="dialog-x" onClick={onClose} title="Close">
+            <IconX size={14} />
+          </button>
+        </div>
 
         <div className="setting-row">
           <label htmlFor="cap">Max concurrent sessions</label>
@@ -145,10 +151,13 @@ export function Settings({ cap, fontFamily, fontSize, restoreOnLaunch, onApplyCa
           <label htmlFor="restore">Restore tabs on launch</label>
           <button
             id="restore"
-            className={`tb-btn ${restoreOnLaunch ? "tb-btn--on" : ""}`}
+            role="switch"
+            aria-checked={restoreOnLaunch}
+            className={`switch ${restoreOnLaunch ? "switch--on" : ""}`}
             onClick={onToggleRestoreOnLaunch}
+            title={restoreOnLaunch ? "On" : "Off"}
           >
-            {restoreOnLaunch ? "On" : "Off"}
+            <span className="switch-knob" />
           </button>
         </div>
         <p className="dialog-body">

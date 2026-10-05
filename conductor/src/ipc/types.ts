@@ -153,6 +153,33 @@ export interface GitCommit {
   timestamp: number;
 }
 
+export interface GitBranch {
+  name: string;
+  current: boolean;
+  remote: boolean;
+  upstream: string | null;
+}
+
+export interface GitRemote {
+  name: string;
+  url: string;
+  webUrl: string | null;
+}
+
+export interface GitStash {
+  index: number;
+  message: string;
+  relative: string;
+  timestamp: number;
+}
+
+export interface GitOpResult {
+  ok: boolean;
+  output: string;
+  conflicts: string[];
+  inProgress: boolean;
+}
+
 // ---- Command --help flag explorer ----
 
 export interface HelpFlag {

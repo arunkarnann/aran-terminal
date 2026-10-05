@@ -7,7 +7,9 @@ import { PermissionsSetup } from "./components/PermissionsSetup";
 import { Settings } from "./components/Settings";
 import { StatusBar } from "./components/StatusBar";
 import { TabGroups } from "./components/TabGroups";
-import { TabStrip } from "./components/TabStrip";
+import { TabStrip, groupSessions } from "./components/TabStrip";
+import { IconCalendar, IconDashboard, IconLayers, IconSettings } from "./components/Icons";
+import { useWindowWidth } from "./lib/useTabDensity";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { useSessionManager } from "./stores/useSessionManager";
@@ -337,27 +339,47 @@ function App() {
     savedFontRef.current = { family, size };
   }, []);
 
+  // Fold the action labels to icons once the tabs (or group pills) sharing the
+  // bar would get cramped. Measured against the *expanded* actions width so it
+  // doesn't flip back and forth at the threshold.
+  const winWidth = useWindowWidth();
+  const EXPANDED_ACTIONS_PX = 540;
+  const foldActions = grouped
+    ? winWidth - EXPANDED_ACTIONS_PX < groupSessions(mgr.sessions).length * 150 + 110
+    : winWidth - EXPANDED_ACTIONS_PX < (mgr.sessions.length + 1) * 140;
+
   const topbarActions = (
-    <div className="topbar-actions">
-      <button className="tb-btn" onClick={() => setShowSummary(true)}>
-        Today
+    <div className={`topbar-actions ${foldActions ? "topbar-actions--folded" : ""}`}>
+      <button className="tb-btn" onClick={() => setShowSummary(true)} title="Today">
+        <IconCalendar />
+        <span className="tb-label">Today</span>
       </button>
-      <button className="tb-btn" onClick={openSettings}>
-        Settings
+      <button className="tb-btn" onClick={openSettings} title="Settings">
+        <IconSettings />
+        <span className="tb-label">Settings</span>
       </button>
       <button
-        className={`tb-btn ${grouped ? "tb-btn--on" : ""}`}
+        className={`tb-btn tb-btn--toggle ${grouped ? "tb-btn--on" : ""}`}
+        role="switch"
+        aria-checked={grouped}
         onClick={toggleGrouped}
         title="Group tabs by folder"
       >
-        Tab Group
+        <IconLayers />
+        <span className="tb-label">Groups</span>
+        <span className="tb-switch" aria-hidden="true" />
       </button>
       <button
-        className={`tb-btn ${showDashboard ? "tb-btn--on" : ""}`}
+        className={`tb-btn tb-btn--toggle ${showDashboard ? "tb-btn--on" : ""}`}
+        role="switch"
+        aria-checked={showDashboard}
         onClick={() => setShowDashboard((v) => !v)}
+        title="Dashboard"
       >
-        Dashboard
+        <IconDashboard />
+        <span className="tb-label">Dashboard</span>
         {waitingCount > 0 && <span className="tb-badge">{waitingCount}</span>}
+        <span className="tb-switch" aria-hidden="true" />
       </button>
     </div>
   );
@@ -428,6 +450,7 @@ function App() {
             activeSessionId={mgr.activeSessionId}
             onFocus={mgr.switchSession}
             onSetLabel={mgr.setTaskLabel}
+            onClose={mgr.closeSession}
             onOpenToday={() => setShowSummary(true)}
           />
         )}

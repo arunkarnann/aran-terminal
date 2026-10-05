@@ -19,6 +19,7 @@ interface DashboardProps {
   activeSessionId: SessionId | null;
   onFocus: (id: SessionId) => void;
   onSetLabel: (id: SessionId, label: string) => void;
+  onClose: (id: SessionId) => void;
   onOpenToday: () => void;
 }
 
@@ -29,6 +30,7 @@ export function Dashboard({
   activeSessionId,
   onFocus,
   onSetLabel,
+  onClose,
   onOpenToday,
 }: DashboardProps) {
   const [filter, setFilter] = useState<Filter>("ALL");
@@ -100,6 +102,7 @@ export function Dashboard({
                 maxUptimeMs={maxUptimeMs}
                 onFocus={() => onFocus(s.id)}
                 onSetLabel={(l) => onSetLabel(s.id, l)}
+                  onClose={() => onClose(s.id)}
               />
             ))}
           </section>
@@ -135,6 +138,7 @@ export function Dashboard({
                   maxUptimeMs={maxUptimeMs}
                   onFocus={() => onFocus(s.id)}
                   onSetLabel={(l) => onSetLabel(s.id, l)}
+                  onClose={() => onClose(s.id)}
                 />
               ))
             )}

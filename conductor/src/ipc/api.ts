@@ -11,7 +11,11 @@ import {
   type FocusDay,
   type FocusKind,
   type CommandHelp,
+  type GitBranch,
   type GitCommit,
+  type GitOpResult,
+  type GitRemote,
+  type GitStash,
   type GitRepo,
   type GitStatus,
   type HistoryEntry,
@@ -247,6 +251,77 @@ export function gitPull(cwd: string): Promise<string> {
 
 export function gitPush(cwd: string, setUpstream: boolean): Promise<string> {
   return invoke<string>("git_push", { cwd, setUpstream });
+}
+
+// ---- Git: branches / remotes / stash / discard / merge ----
+
+export function gitBranches(cwd: string): Promise<GitBranch[]> {
+  return invoke<GitBranch[]>("git_branches", { cwd });
+}
+
+export function gitCheckout(cwd: string, branch: string, create = false): Promise<string> {
+  return invoke<string>("git_checkout", { cwd, branch, create });
+}
+
+export function gitCreateBranch(cwd: string, name: string, source?: string): Promise<string> {
+  return invoke<string>("git_create_branch", { cwd, name, source: source ?? null });
+}
+
+export function gitDeleteBranch(cwd: string, name: string, force = false): Promise<string> {
+  return invoke<string>("git_delete_branch", { cwd, name, force });
+}
+
+export function gitRemotes(cwd: string): Promise<GitRemote[]> {
+  return invoke<GitRemote[]>("git_remotes", { cwd });
+}
+
+export function gitStashes(cwd: string): Promise<GitStash[]> {
+  return invoke<GitStash[]>("git_stashes", { cwd });
+}
+
+export function gitStashPush(
+  cwd: string,
+  message?: string,
+  includeUntracked = false,
+): Promise<string> {
+  return invoke<string>("git_stash_push", { cwd, message: message ?? null, includeUntracked });
+}
+
+export function gitStashPop(cwd: string): Promise<string> {
+  return invoke<string>("git_stash_pop", { cwd });
+}
+
+export function gitStashApply(cwd: string, index: number): Promise<string> {
+  return invoke<string>("git_stash_apply", { cwd, index });
+}
+
+export function gitStashDrop(cwd: string, index: number): Promise<string> {
+  return invoke<string>("git_stash_drop", { cwd, index });
+}
+
+/** Discard working-tree changes for tracked `paths`; delete `untracked` files. */
+export function gitDiscard(cwd: string, paths: string[], untracked: string[] = []): Promise<void> {
+  return invoke("git_discard", { cwd, paths, untracked });
+}
+
+export function gitDiscardAll(cwd: string): Promise<void> {
+  return invoke("git_discard_all", { cwd });
+}
+
+export function gitMerge(cwd: string, branch: string): Promise<GitOpResult> {
+  return invoke<GitOpResult>("git_merge", { cwd, branch });
+}
+
+export function gitAbortMerge(cwd: string): Promise<string> {
+  return invoke<string>("git_abort_merge", { cwd });
+}
+
+export function gitMergeInProgress(cwd: string): Promise<boolean> {
+  return invoke<boolean>("git_merge_in_progress", { cwd });
+}
+
+export function gitCherryPick(cwd: string, hash: string): Promise<GitOpResult> {
+  return invoke<GitOpResult>("git_cherry_pick", { cwd, hash });
 }
 
 // ---- macOS permissions (issue #3: stop repeated TCC prompts) ----

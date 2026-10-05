@@ -42,6 +42,14 @@ pub fn run() {
             let mgr = app.state::<PtyState>().0.clone();
             let dbc = app.state::<DbState>().0.clone();
 
+            // Close sessions left open by a prior run (quit/crash). Restored tabs spawn
+            // fresh session rows, so without this the old rows stay "open" forever and
+            // inflate the daily stats. Must run before any PTY is spawned.
+            {
+                let conn = dbc.lock().unwrap();
+                db::reconcile_orphans(&conn);
+            }
+
             // Auto-learn: import the user's existing shell history once, so suggestions
             // work from the first keystroke instead of waiting to build history in-app.
             {
@@ -110,13 +118,43 @@ pub fn run() {
             commands::git_fetch,
             commands::git_pull,
             commands::git_push,
+            commands::git_branches,
+            commands::git_checkout,
+            commands::git_create_branch,
+            commands::git_delete_branch,
+            commands::git_remotes,
+            commands::git_stashes,
+            commands::git_stash_push,
+            commands::git_stash_pop,
+            commands::git_stash_apply,
+            commands::git_stash_drop,
+            commands::git_discard,
+            commands::git_discard_all,
+            commands::git_merge,
+            commands::git_abort_merge,
+            commands::git_merge_in_progress,
+            commands::git_cherry_pick,
             commands::command_help,
             permissions::check_full_disk_access,
             permissions::open_full_disk_access_settings,
             permissions::prime_folder_permissions,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // On quit, record an exact close time for every live session so the daily
+            // stats don't have to guess from last activity (see db::reconcile_orphans).
+            if let tauri::RunEvent::Exit = event {
+                let mgr = app.state::<PtyState>().0.clone();
+                let dbc = app.state::<DbState>().0.clone();
+                let ids = mgr.lock().unwrap().ids();
+                let now = pty::now_ms();
+                let conn = dbc.lock().unwrap();
+                for id in ids {
+                    db::mark_session_closed(&conn, &id, now);
+                }
+            }
+        });
 }
 
 /// Read the most recent `max` command lines from the user's shell history files.

@@ -2,11 +2,13 @@
 // row 2 is the tabs of the active group. The active group always follows the
 // active session; clicking another group tag jumps to that group's first tab.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { SessionId, SessionMeta } from "../ipc/types";
 import { Tab, TabGroup, groupSessions } from "./TabStrip";
 import { useNow } from "../lib/useNow";
 import { getProjectColor, useProjectColors } from "../lib/projectColors";
+import { tabDensity, useElementWidth } from "../lib/useTabDensity";
+import { IconPlus, IconX } from "./Icons";
 
 interface TabGroupsProps {
   sessions: SessionMeta[];
@@ -47,6 +49,9 @@ export function TabGroups({
   // Group pending confirmation to close (null = no dialog open).
   const [pendingClose, setPendingClose] = useState<TabGroup | null>(null);
 
+  const stripRef = useRef<HTMLDivElement>(null);
+  const density = tabDensity(useElementWidth(stripRef), activeGroup?.sessions.length ?? 0);
+
   const confirmCloseGroup = () => {
     if (pendingClose) {
       for (const s of pendingClose.sessions) onClose(s.id);
@@ -67,7 +72,7 @@ export function TabGroups({
               role="button"
               tabIndex={0}
               className={`tab2-group ${active ? "tab2-group--on" : ""}`}
-              style={active ? { boxShadow: `inset 0 -2px 0 ${color}` } : undefined}
+              style={{ "--tab-color": color } as CSSProperties}
               onClick={() => {
                 if (active) return;
                 const lastId = lastActiveRef.current[g.key];
@@ -79,20 +84,22 @@ export function TabGroups({
               }}
               title={g.cwd ?? g.project ?? "Loose"}
             >
-              <span className="tab2-group-dot" style={{ background: color }} />
-              {g.project ?? "Loose"}
+              <span className="tab2-group-dot" />
+              <span className="tab2-group-name">{g.project ?? "Loose"}</span>
               <span className="tab2-group-count">{g.sessions.length}</span>
               <button
                 className="tab2-group-close"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setPendingClose(g);
+                  // A single-tab group is just a tab: close it directly, no dialog.
+                  if (g.sessions.length === 1) onClose(g.sessions[0].id);
+                  else setPendingClose(g);
                 }}
                 title={`Close group — closes all ${g.sessions.length} tab${
                   g.sessions.length === 1 ? "" : "s"
                 }`}
               >
-                ✕
+                <IconX size={11} />
               </button>
             </div>
           );
@@ -102,13 +109,14 @@ export function TabGroups({
           onClick={() => onAdd()}
           title="New terminal (fresh folder)  ⌘N"
         >
-          ＋ New
+          <IconPlus size={14} />
+          <span className="tb-label">New</span>
         </button>
         {actions}
       </div>
 
       {/* Row 2 — tabs of the active group */}
-      <div className="tab-strip tab2-tabs">
+      <div className="tab-strip tab2-tabs" ref={stripRef} data-density={density}>
         {activeGroup?.sessions.map((s) => (
           <Tab
             key={s.id}
@@ -122,14 +130,21 @@ export function TabGroups({
         ))}
         <button
           className="tab-add tab-add--group"
-          onClick={() => onAdd(activeGroup?.cwd ?? undefined)}
+          // Prefer the active tab's own folder (the one you're actually in);
+          // fall back to the group's representative folder.
+          onClick={() => {
+            const activeSession = activeGroup?.sessions.find(
+              (s) => s.id === activeSessionId,
+            );
+            onAdd(activeSession?.cwd ?? activeGroup?.cwd ?? undefined);
+          }}
           title={
             activeGroup?.project
               ? `New tab in ${activeGroup.project}  ⌘T`
               : "New tab in this folder  ⌘T"
           }
         >
-          +
+          <IconPlus size={15} />
         </button>
       </div>
 

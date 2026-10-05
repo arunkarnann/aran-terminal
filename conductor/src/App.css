@@ -21,9 +21,35 @@
   --overlay: rgba(0, 0, 0, 0.6);
   --badgeBg: #ff79c6;
   --badgeText: #282a36;
-  /* Sharp, tech-forward geometry: every corner routes through this token.
-     0 = fully squared edges. Bump to a small px value to soften globally. */
-  --radius: 0px;
+  /* Soft, modern geometry: every corner routes through these tokens.
+     Set --radius to 0px to go back to fully squared edges. */
+  --radius: 8px;
+  --radius-sm: 5px;
+  --radius-pill: 999px;
+  /* Motion: one easing + duration so every hover/press feels the same. */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur: 160ms;
+  /* Chrome (tab bar) surfaces, derived from the theme so light themes work. */
+  /* Recessed a step below the panel so the active tab visibly lifts out of it
+     (works for light themes too: it darkens to a Chrome-like grey). */
+  --chrome-bg: color-mix(in srgb, var(--panel) 86%, #000);
+  --tab-active-bg: var(--bg);
+  --tab-hover-bg: color-mix(in srgb, var(--text) 7%, transparent);
+  --tab-h: 2.3rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.icon {
+  flex: none;
+  display: block;
 }
 
 * {
@@ -54,17 +80,18 @@ body {
 .topbar {
   display: flex;
   align-items: stretch;
-  gap: 0.75rem;
-  padding: 0 0.9rem;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  gap: 0.5rem;
+  padding: 0 0.6rem 0 0;
+  background: var(--chrome-bg);
+  /* Hairline under the bar; the active tab paints over it so it "opens" into the workspace. */
+  box-shadow: inset 0 -1px 0 var(--border);
   user-select: none;
 }
 
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.25rem;
   flex: none;
   margin-left: auto;
 }
@@ -585,49 +612,147 @@ body {
   margin-right: auto;
 }
 
-/* ---- Tab strip ---- */
+/* ---- Tab strip (Chromium-style) ---- */
 
 .tab-strip {
   display: flex;
-  align-items: stretch;
-  justify-content: flex-start; /* tabs on the left of the bar */
+  align-items: flex-end;
+  justify-content: flex-start;
   gap: 0;
   flex: 1;
   min-width: 0;
-  padding: 0;
-  min-height: 2.6rem;
+  padding: 0.4rem 0.4rem 0 0.7rem;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+}
+.tab-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.4rem 0.8rem;
-  font-size: 1.04rem;
+  /* Tabs share the strip and shrink together, like a browser. */
+  flex: 1 1 17.5rem;
+  min-width: 2.6rem;
+  max-width: 17.5rem;
+  height: var(--tab-h);
+  padding: 0 0.4rem 0 0.75rem;
+  font-size: 0.95rem;
+  color: var(--muted);
   cursor: pointer;
-  border-right: 1px solid var(--border);
   user-select: none;
   white-space: nowrap;
-  min-width: 6.5rem;
-  max-width: 22rem;
-  opacity: 0.55;
-  transition: opacity 0.15s, background 0.15s;
+  border-radius: var(--radius) var(--radius) 0 0;
+  /* 1px separator on the left, drawn as a background so pseudo-elements stay free. */
+  background-color: transparent;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-size: 1px 45%;
+  background-position: left center;
+  background-repeat: no-repeat;
+  transition:
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+  animation: tab-in 220ms var(--ease);
+}
+
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* No separator at the start, around the active tab, or around the hovered tab. */
+.tab:first-child,
+.tab:hover,
+.tab:hover + .tab,
+.tab--active,
+.tab--active + .tab,
+.tab--active + .tab-add {
+  background-image: none;
+}
+
+.tab:hover {
+  background-color: var(--tab-hover-bg);
+  color: var(--text);
+}
+
+.tab--active,
+.tab--active:hover {
+  background-color: var(--tab-active-bg);
+  color: var(--text);
+  z-index: 1;
+  /* Depth: coloured top accent (project color, else theme accent) and a soft
+     lift shadow onto the darker strip. */
+  box-shadow:
+    inset 0 2px 0 var(--tab-color, var(--primary)),
+    0 -3px 12px -3px rgba(0, 0, 0, 0.5);
+}
+
+/* Inactive tabs recede: dimmer text/details, but the state dot, waiting
+   tint and critical-memory alert keep full strength. */
+.tab:not(.tab--active) .tab-label,
+.tab:not(.tab--active) .tab-uptime,
+.tab:not(.tab--active) .tab-mem:not(.tab-mem--critical),
+.tab:not(.tab--active) .tab-swatch {
+  opacity: 0.72;
+  transition: opacity var(--dur) var(--ease);
+}
+.tab:not(.tab--active):hover .tab-label,
+.tab:not(.tab--active):hover .tab-uptime,
+.tab:not(.tab--active):hover .tab-mem,
+.tab:not(.tab--active):hover .tab-swatch {
+  opacity: 1;
+}
+
+/* Inverted corners so the active tab flows into the workspace below. */
+.tab--active::before,
+.tab--active::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: var(--radius);
+  height: var(--radius);
+  pointer-events: none;
+}
+.tab--active::before {
+  left: calc(-1 * var(--radius));
+  background: radial-gradient(
+    circle at 0 0,
+    transparent calc(var(--radius) - 0.5px),
+    var(--tab-active-bg) var(--radius)
+  );
+}
+.tab--active::after {
+  right: calc(-1 * var(--radius));
+  background: radial-gradient(
+    circle at 100% 0,
+    transparent calc(var(--radius) - 0.5px),
+    var(--tab-active-bg) var(--radius)
+  );
+}
+
+.tab--active .tab-label {
+  font-weight: 600;
 }
 
 .tab-mem {
   flex: none;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
 }
 
 .tab-mem-warn {
-  font-size: 0.7rem;
-  line-height: 1;
+  flex: none;
 }
 
 /* Memory climbing — amber, no longer muted so it reads at a glance. */
@@ -642,8 +767,8 @@ body {
   color: #fff;
   font-weight: 700;
   background: var(--error);
-  padding: 1px 5px;
-  border-radius: var(--radius);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
   animation: tab-mem-pulse 1.8s ease-in-out infinite;
 }
 
@@ -659,41 +784,25 @@ body {
 
 /* Tint the whole tab so the warning is visible from the strip, not just the badge. */
 .tab--mem-critical {
-  background: color-mix(in srgb, var(--error) 12%, transparent);
+  background-color: color-mix(in srgb, var(--error) 12%, transparent);
 }
-
-.tab:hover {
-  background: var(--hoverBg);
-  opacity: 0.8;
-}
-
-.tab--active {
-  /* Solid accent fill so the active tab reads as fully selected, not just tinted.
-     Slightly deepened so white text stays legible across themes. */
-  background: color-mix(in srgb, var(--primary) 88%, #000);
-  opacity: 1;
-  border-bottom: none;
-  position: relative;
-  box-shadow: inset 0 2px 0 var(--primary), 0 -1px 6px rgba(0, 0, 0, 0.28);
-  z-index: 1;
-}
-
-.tab--active .tab-label,
-.tab--active .tab-uptime,
-.tab--active .tab-mem {
-  color: #fff;
-  font-weight: 600;
+.tab--mem-critical.tab--active {
+  background-color: color-mix(in srgb, var(--error) 12%, var(--tab-active-bg));
 }
 
 .tab-state-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: var(--radius);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   flex: none;
+  transition: background var(--dur) var(--ease);
 }
 
 .tab--waiting {
-  background: color-mix(in srgb, var(--waiting) 14%, transparent);
+  background-color: color-mix(in srgb, var(--waiting) 14%, transparent);
+}
+.tab--waiting.tab--active {
+  background-color: color-mix(in srgb, var(--waiting) 14%, var(--tab-active-bg));
 }
 
 .tab--waiting .tab-label {
@@ -702,67 +811,127 @@ body {
 
 .tab-label {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
+  /* Fade the tail instead of a hard cut, like browser tab titles. */
+  -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+  mask-image: linear-gradient(to right, #000 85%, transparent);
 }
 
 .tab-rename-input {
   flex: 1;
   background: var(--bg);
-  border: 1px solid var(--inputBorder);
+  border: 1px solid var(--inputFocusBorder);
+  border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 1.04rem;
-  padding: 0.1rem 0.2rem;
+  font-size: 0.95rem;
+  padding: 0.1rem 0.3rem;
   outline: none;
   min-width: 0;
 }
 
-.tab-close {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 0.85rem;
-  padding: 0.15rem 0.2rem;
-  line-height: 1;
-  border-radius: var(--radius);
-}
-
-.tab-close:hover {
-  color: var(--text);
-  background: var(--hoverBg);
-}
-
+.tab-close,
 .tab-reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   background: none;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 0.85rem;
-  padding: 0.15rem 0.2rem;
-  line-height: 1;
-  border-radius: var(--radius);
+  border-radius: 50%;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
 }
 
+.tab-close:hover,
 .tab-reveal:hover {
   color: var(--text);
-  background: var(--hoverBg);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+/* Folder reveal is secondary — show it on hover/active only. */
+.tab-reveal {
+  opacity: 0;
+}
+.tab:hover .tab-reveal,
+.tab--active .tab-reveal {
+  opacity: 1;
 }
 
 .tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin: 0.2rem 0 0 0.35rem;
+  padding: 0;
   background: none;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 1.4rem;
-  padding: 0 0.9rem;
-  line-height: 1;
-  border-right: 1px solid var(--border);
+  border-radius: 50%;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease);
 }
 
 .tab-add:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--tab-hover-bg);
+}
+
+/* ---- Tab density: tabs drop detail as they shrink (set from JS) ---- */
+
+[data-density="compact"] .tab-uptime,
+[data-density="compact"] .tab-mem:not(.tab-mem--high):not(.tab-mem--critical),
+[data-density="compact"] .tab-reveal,
+[data-density="tight"] .tab-uptime,
+[data-density="tight"] .tab-mem:not(.tab-mem--critical),
+[data-density="tight"] .tab-reveal,
+[data-density="tight"] .tab-swatch,
+[data-density="mini"] .tab-uptime,
+[data-density="mini"] .tab-mem,
+[data-density="mini"] .tab-reveal,
+[data-density="mini"] .tab-swatch,
+[data-density="mini"] .tab-label {
+  display: none;
+}
+
+/* Narrower tabs keep the critical-memory alert, but as an icon-only pill
+   so the label still says which session it is (size is in the tooltip). */
+[data-density="compact"] .tab-mem--critical,
+[data-density="tight"] .tab-mem--critical {
+  font-size: 0;
+  padding: 2px 4px;
+}
+/* Inactive tabs never paint into their neighbours. */
+.tab:not(.tab--active) {
+  overflow: hidden;
+}
+
+/* Narrow tabs: close button only on the active or hovered tab (browser behavior). */
+[data-density="tight"] .tab:not(.tab--active):not(:hover) .tab-close,
+[data-density="mini"] .tab:not(.tab--active) .tab-close {
+  display: none;
+}
+[data-density="tight"] .tab {
+  padding: 0 0.3rem 0 0.6rem;
+  gap: 0.35rem;
+}
+[data-density="mini"] .tab {
+  justify-content: center;
+  padding: 0 0.25rem;
 }
 
 /* ---- Dialog ---- */
@@ -770,32 +939,86 @@ body {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.18);
+  /* Soft scrim tinted by the theme (no backdrop blur: it would re-blur the
+     live WebGL terminal every frame). */
+  background: color-mix(in srgb, var(--bg) 35%, rgba(0, 0, 0, 0.45));
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
-  padding: 0.5rem;
+  padding: 1rem;
+  animation: overlay-in 180ms var(--ease);
 }
 .dialog-overlay > .dialog {
-  max-height: calc(100vh - 1rem);
+  max-height: calc(100vh - 2rem);
   overflow-y: auto;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
 }
 
 .dialog {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.25rem;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 14px;
+  padding: 1.4rem 1.5rem;
   min-width: 360px;
   max-width: 480px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--text) 6%, transparent) inset,
+    0 24px 60px -12px rgba(0, 0, 0, 0.5),
+    0 8px 20px -8px rgba(0, 0, 0, 0.35);
+  animation: dialog-in 220ms var(--ease);
+  scrollbar-width: thin;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+.dialog-header .dialog-title {
+  margin: 0;
+}
+
+/* Round close button in a dialog header. */
+.dialog-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+.dialog-x:hover {
+  background: var(--tab-hover-bg);
+  color: var(--text);
 }
 
 .dialog-title {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
-  font-weight: 600;
+  margin: 0 0 0.6rem;
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .dialog-body {
@@ -853,6 +1076,17 @@ body {
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
+  margin-top: 0.4rem;
+}
+
+/* Settings scrolls; keep Save/Cancel pinned to the bottom of the card. */
+.dialog--settings .dialog-actions {
+  position: sticky;
+  bottom: -1.4rem;
+  margin: 0.8rem -1.5rem -1.4rem;
+  padding: 0.9rem 1.5rem;
+  background: var(--panel);
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 /* Left-aligned action row with trailing status text (PermissionsSetup). */
@@ -863,21 +1097,41 @@ body {
 }
 
 .btn {
-  background: var(--border);
-  border: none;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  border: 1px solid transparent;
   color: var(--text);
   cursor: pointer;
-  font-size: 0.82rem;
-  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  height: 32px;
+  padding: 0 1rem;
   border-radius: var(--radius);
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
 }
 
 .btn:hover {
-  background: var(--selectedBg);
+  background: color-mix(in srgb, var(--text) 15%, transparent);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn:focus-visible,
+.dialog-x:focus-visible,
+.switch:focus-visible,
+.theme-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
 .btn-primary {
   background: var(--primary);
+  color: var(--bg);
+  font-weight: 600;
 }
 
 .btn-primary:hover {
@@ -901,31 +1155,93 @@ body {
 }
 
 .tb-btn {
-  background: none;
-  border: 1px solid var(--border);
+  position: relative;
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--muted);
-  font-size: 0.98rem;
-  padding: 0.32rem 0.8rem;
+  font-size: 0.92rem;
+  font-weight: 500;
+  height: 30px;
+  padding: 0 0.7rem;
   border-radius: var(--radius);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  width: 108px;
   flex: none;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    padding var(--dur) var(--ease);
 }
 
 .tb-btn:hover {
   color: var(--text);
+  background: var(--tab-hover-bg);
 }
 
-/* Selected/active button (Group or Dashboard when on): solid accent fill. */
-.tb-btn--on {
-  background: color-mix(in srgb, var(--primary) 88%, #000);
-  border-color: var(--primary);
-  color: #fff;
+.tb-btn:active {
+  transform: scale(0.97);
+}
+
+/* Selected/active button (Groups or Dashboard when on): soft accent tint. */
+.tb-btn--on,
+.tb-btn--on:hover {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+  color: color-mix(in srgb, var(--primary) 75%, var(--text));
+}
+
+/* Toggle buttons (Groups / Dashboard) carry a mini switch so they read as on/off. */
+.tb-switch {
+  position: relative;
+  flex: none;
+  width: 24px;
+  height: 14px;
+  margin-left: 0.15rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+  transition: background var(--dur) var(--ease);
+}
+.tb-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform 200ms var(--ease);
+}
+.tb-btn--on .tb-switch {
+  background: var(--primary);
+}
+.tb-btn--on .tb-switch::after {
+  transform: translateX(10px);
+}
+.topbar-actions--folded .tb-switch {
+  display: none;
+}
+
+/* Folded: icon-only buttons once the tab bar runs out of room. */
+.topbar-actions--folded .tb-label {
+  display: none;
+}
+.topbar-actions--folded .tb-btn {
+  width: 32px;
+  padding: 0;
+}
+.topbar-actions--folded .tb-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  text-align: center;
 }
 
 .tb-badge,
@@ -934,8 +1250,8 @@ body {
   color: var(--badgeText);
   font-size: 0.62rem;
   font-weight: 700;
-  border-radius: var(--radius);
-  padding: 0 0.35rem;
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.4rem;
   line-height: 1.3;
 }
 
@@ -1046,31 +1362,33 @@ body {
   pointer-events: none;
 }
 
-/* RAM / Time progress bars on a dashboard session card. */
+/* RAM / Uptime bars on a dashboard session card — side by side to stay compact. */
 .card-bars {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0.45rem 0 0.35rem;
+  gap: 0.75rem;
+  margin: 0.4rem 0 0.25rem;
 }
 .bar-row {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 .bar-k {
-  width: 2.2rem;
   flex: none;
-  font-size: 0.6rem;
+  font-size: 0.58rem;
+  font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
 }
 .bar-track {
   flex: 1;
-  height: 2px;
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--border) 35%, transparent);
+  min-width: 1.5rem;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--border) 45%, transparent);
   overflow: hidden;
 }
 .bar-fill {
@@ -1102,7 +1420,6 @@ body {
   }
 }
 .bar-v {
-  width: 3.4rem;
   flex: none;
   text-align: right;
   font-size: 0.64rem;
@@ -1113,23 +1430,26 @@ body {
 /* Project color dot on a dashboard session card. */
 .card-proj-dot {
   display: inline-block;
+  flex: none;
   width: 7px;
   height: 7px;
-  border-radius: var(--radius);
-  margin-right: 0.3rem;
-  vertical-align: middle;
+  border-radius: 50%;
 }
 
 /* Editable per-project color swatch in a tab. */
 .tab-swatch {
   position: relative;
-  width: 14px;
-  height: 14px;
-  border-radius: var(--radius);
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
   flex: none;
   cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
   overflow: hidden;
+  transition: transform var(--dur) var(--ease);
+}
+.tab-swatch:hover {
+  transform: scale(1.25);
 }
 .tab-swatch input[type="color"] {
   position: absolute;
@@ -1142,24 +1462,27 @@ body {
   cursor: pointer;
 }
 
+/* Active tab: a soft ring in the project color around its swatch. */
+.tab--active[style*="--tab-color"] .tab-swatch {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tab-color) 35%, transparent);
+}
+
 /* Distinct "new terminal" button (vs. the per-group "+"). */
 .tab-add--global {
-  display: inline-flex;
-  align-items: center;
   width: auto;
-  gap: 0.4rem;
-  padding: 0.6rem 1.1rem;
-  margin-left: 0.4rem;
-  font-size: 1.12rem;
-  font-weight: 500;
-  line-height: 1;
-  color: var(--primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  height: 30px;
+  gap: 0.35rem;
+  padding: 0 0.8rem 0 0.6rem;
+  margin: 0 0 0 0.2rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--primary) 80%, var(--text));
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-radius: var(--radius-pill);
 }
 .tab-add--global:hover {
-  background: var(--hoverBg);
-  border-color: var(--primary);
+  color: color-mix(in srgb, var(--primary) 80%, var(--text));
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
 }
 .tab-add--group {
   color: var(--muted);
@@ -1169,90 +1492,114 @@ body {
   flex: 1;
 }
 
-/* Two-tier horizontal tabs: row 1 = group tags, row 2 = active group's tabs. */
+/* Two-tier horizontal tabs: row 1 = group pills, row 2 = active group's tabs. */
 .tab2 {
   display: flex;
   flex-direction: column;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  background: var(--chrome-bg);
+  box-shadow: inset 0 -1px 0 var(--border);
+  user-select: none;
 }
 .tab2-groups {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 0.8rem;
-  border-bottom: 1px solid var(--border);
+  gap: 0.3rem;
+  padding: 0.45rem 0.6rem 0.1rem;
   overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab2-groups::-webkit-scrollbar {
+  display: none;
 }
 .tab2-group {
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.45rem;
+  flex: 0 1 auto;
+  min-width: 3.2rem;
+  height: 30px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  border-radius: var(--radius);
-  padding: 0.6rem 1.1rem;
-  font-size: 1.12rem;
+  border-radius: var(--radius-pill);
+  padding: 0 0.35rem 0 0.7rem;
+  font-size: 0.92rem;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
-  flex: none;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
 }
 .tab2-group:hover {
-  background: var(--hoverBg);
+  background: var(--tab-hover-bg);
+  color: var(--text);
+}
+.tab2-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Per-group close (✕) — closes every tab in the group after confirmation. */
 .tab2-group-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
   background: none;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 0.95rem;
-  line-height: 1;
-  padding: 0.1rem 0.25rem;
-  margin-left: 0.1rem;
-  border-radius: var(--radius);
-  opacity: 0.6;
+  border-radius: 50%;
+  opacity: 0;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+.tab2-group:hover .tab2-group-close,
+.tab2-group--on .tab2-group-close {
+  opacity: 0.8;
 }
 .tab2-group-close:hover {
   color: #fff;
   background: var(--error);
   opacity: 1;
 }
-.tab2-group--on {
-  background: color-mix(in srgb, var(--primary) 88%, #000);
-  color: #fff;
+.tab2-group--on,
+.tab2-group--on:hover {
+  background: color-mix(in srgb, var(--tab-color, var(--primary)) 16%, transparent);
+  border-color: color-mix(in srgb, var(--tab-color, var(--primary)) 40%, transparent);
+  color: var(--text);
   font-weight: 600;
 }
 .tab2-group--on .tab2-group-count {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.22);
-}
-.tab2-group--on .tab2-group-close {
-  color: rgba(255, 255, 255, 0.85);
-  opacity: 0.9;
+  color: var(--text);
+  background: color-mix(in srgb, var(--tab-color, var(--primary)) 28%, transparent);
 }
 .tab2-group-dot {
-  width: 13px;
-  height: 13px;
-  border-radius: var(--radius);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
   flex: none;
+  background: var(--tab-color, var(--muted));
 }
 .tab2-group-count {
+  flex: none;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.75rem;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--muted) 18%, transparent);
-  border-radius: var(--radius);
-  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.45rem;
 }
-/* Row 2 reuses .tab-strip; just drop its own bottom border. */
 .tab2-tabs {
-  border-bottom: 0;
+  flex: none;
 }
 .sb-git {
   display: inline-flex;
@@ -1942,45 +2289,56 @@ body {
 /* ---- Session card ---- */
 
 .card {
+  position: relative;
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.5rem 0.6rem;
-  margin-bottom: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem 0.4rem 0.7rem;
+  margin-bottom: 0.35rem;
   cursor: pointer;
+  overflow: hidden;
+  transition:
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+/* Left status rail (project color if set, else state color). */
+.card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--card-color, var(--border));
 }
 
 .card:hover {
-  border-color: var(--selectedBg);
-  background: var(--hoverBg);
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  background: color-mix(in srgb, var(--text) 3%, var(--bg));
 }
 
 .card--active {
-  border-color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
 }
 
-.card--running {
-  border-left-color: var(--running);
-}
-.card--idle {
-  border-left-color: var(--idle);
-}
 .card--waiting {
-  border-left-color: var(--waiting);
-  background: color-mix(in srgb, var(--waiting) 7%, transparent);
+  border-color: color-mix(in srgb, var(--waiting) 45%, transparent);
+  background: color-mix(in srgb, var(--waiting) 7%, var(--bg));
 }
 
 .card-top {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  min-height: 22px;
 }
 
 .card-dot {
   width: 8px;
   height: 8px;
-  border-radius: var(--radius);
+  border-radius: 50%;
   flex: none;
 }
 
@@ -1988,50 +2346,115 @@ body {
   font-weight: 600;
   font-size: 0.82rem;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.card-state {
-  font-size: 0.68rem;
+/* Per-card tool buttons: label, reveal in Finder, close. Always visible but
+   quiet; full strength on hover. */
+.card-tools {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  opacity: 0.55;
+  transition: opacity var(--dur) var(--ease);
+}
+.card:hover .card-tools,
+.card--active .card-tools {
+  opacity: 1;
+}
+.card-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+.card-tool:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.card-tool--danger:hover {
+  color: #fff;
+  background: var(--error);
 }
 
-.card-project {
-  font-size: 0.72rem;
+.card-state {
+  display: inline-flex;
+  gap: 0.45rem;
+  margin-left: auto;
+  font-size: 0.66rem;
   color: var(--muted);
-  margin-top: 0.25rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.card-state > span:first-child {
+  font-weight: 600;
+}
+
+/* Label / project / state on one wrapping row of chips. */
+.card-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
 }
 
 .card-label {
-  font-size: 0.76rem;
-  color: var(--text);
-  margin-top: 0.3rem;
-  font-style: italic;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  min-width: 0;
+  height: 20px;
+  padding: 0 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: color-mix(in srgb, var(--primary) 70%, var(--text));
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: text;
+  transition:
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
 }
-
 .card-label:hover {
-  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.card-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-label-input {
-  width: 100%;
-  margin-top: 0.3rem;
-  background: var(--bg);
-  border: 1px solid var(--inputBorder);
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  background: var(--panel);
+  border: 1px solid var(--inputFocusBorder);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
   color: var(--text);
   font-size: 0.76rem;
-  padding: 0.15rem 0.3rem;
-  border-radius: var(--radius);
+  padding: 0 0.5rem;
+  border-radius: var(--radius-pill);
   outline: none;
-}
-
-.card-stats {
-  display: flex;
-  gap: 0.7rem;
-  margin-top: 0.4rem;
-  font-size: 0.68rem;
-  color: var(--muted);
 }
 
 /* ---- Daily summary ---- */
@@ -2128,23 +2551,42 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.6rem;
-  font-size: 0.84rem;
+  gap: 1rem;
+  min-height: 34px;
+  margin-bottom: 0.3rem;
+  font-size: 0.88rem;
+  font-weight: 500;
 }
 
 .setting-row input,
 .theme-select {
-  width: 72px;
+  width: 76px;
+  height: 30px;
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 0.25rem 0.4rem;
+  font: inherit;
+  font-weight: 400;
+  padding: 0 0.55rem;
   border-radius: var(--radius);
+  outline: none;
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+.setting-row input:hover,
+.theme-select:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+.setting-row input:focus,
+.theme-select:focus {
+  border-color: var(--inputFocusBorder);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .theme-select {
   width: auto;
-  min-width: 140px;
+  min-width: 160px;
   cursor: pointer;
 }
 
@@ -2155,14 +2597,59 @@ body {
 .setting-muted {
   color: var(--muted);
   font-size: 0.78rem;
+  font-weight: 400;
 }
 
+/* Section heading with a hairline that runs to the edge. */
 .setting-section-label {
-  font-size: 0.74rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--muted);
-  margin: 0.6rem 0 0.35rem;
+  margin: 1.2rem 0 0.6rem;
+}
+.setting-section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* iOS-style toggle switch. */
+.switch {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 20%, transparent);
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+.switch--on {
+  background: var(--primary);
+}
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 200ms var(--ease);
+}
+.switch--on .switch-knob {
+  transform: translateX(18px);
 }
 
 /* ---- Visual theme grid ---- */
@@ -2170,43 +2657,49 @@ body {
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 0.4rem;
+  gap: 0.5rem;
   margin-bottom: 0.6rem;
 }
 
 .theme-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.4rem;
+  align-items: stretch;
+  gap: 0.35rem;
+  padding: 0.35rem 0.35rem 0.4rem;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 10px;
   cursor: pointer;
-  transition: border-color 0.15s, transform 0.1s;
+  transition:
+    border-color var(--dur) var(--ease),
+    transform var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
   font-family: inherit;
 }
 
 .theme-card:hover {
-  border-color: var(--primary);
-  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--primary) 60%, var(--border));
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.4);
 }
 
-.theme-card--active {
+.theme-card--active,
+.theme-card--active:hover {
   border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 40%, transparent);
 }
 
 .theme-swatch {
   width: 100%;
-  height: 36px;
-  border-radius: var(--radius);
+  height: 40px;
+  border-radius: 6px;
   display: block;
 }
 
 .theme-swatch-name {
-  font-size: 0.6rem;
+  font-size: 0.7rem;
+  text-align: center;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -2298,7 +2791,7 @@ body {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
-  margin-top: 0.35rem;
+  margin-top: 0.2rem;
   font-size: 0.98rem;
   font-weight: 700;
   color: var(--waitingText);
@@ -2321,14 +2814,23 @@ body {
 .card-meta {
   display: flex;
   gap: 0.6rem;
-  margin-top: 0.5rem;
+  margin-top: 0.15rem;
   font-size: 0.68rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
 .card-proj {
-  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  height: 20px;
+  padding: 0 0.45rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  font-size: 0.7rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2339,9 +2841,18 @@ body {
   margin-left: auto;
 }
 
+/* No label yet: a dashed "+ Add label" chip that clearly invites a click. */
 .card-label--empty {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--muted) 60%, transparent);
+  background: transparent;
   color: var(--muted);
-  font-style: italic;
+  font-weight: 500;
+}
+.card-label--empty:hover {
+  border-color: var(--primary);
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 
 .dashboard-empty kbd {
@@ -2841,4 +3352,93 @@ body {
 }
 .update-banner-dismiss:hover {
   opacity: 1;
+}
+
+/* ---- Git panel: branches / remote / stash / merge (#6) ---- */
+.git-head-btn {
+  font-size: 0.8rem;
+}
+.git-head-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.git-branch-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.45rem;
+  border-bottom: 1px solid var(--border);
+}
+.git-branch-select,
+.git-inline-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.7rem;
+  color: var(--text);
+  background: var(--panelBg, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.15rem 0.35rem;
+}
+.git-inline-input:focus,
+.git-branch-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.git-sync-btn--danger {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 50%, transparent);
+}
+.git-inprogress {
+  flex: 1;
+  font-size: 0.68rem;
+  color: var(--error);
+}
+.git-status-line--ok {
+  color: var(--success, var(--accent));
+  background: color-mix(in srgb, var(--success, var(--accent)) 10%, transparent);
+}
+.git-conflict-path {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+}
+.git-count--stash {
+  margin-left: 0.25rem;
+  opacity: 0.7;
+}
+.git-group-actions {
+  display: inline-flex;
+  gap: 0.35rem;
+}
+.git-group-action--danger:hover {
+  color: var(--error);
+}
+.git-commit-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+.git-commit-row .git-commit {
+  flex: 1;
+  min-width: 0;
+}
+.git-commit-actions-hover {
+  position: absolute;
+  right: 0.3rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  gap: 0.1rem;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.git-commit-row:hover .git-commit-actions-hover {
+  opacity: 1;
+}
+.git-commit-actions-hover .git-file-action {
+  opacity: 1;
+}
+.git-stash .git-meta {
+  color: var(--muted);
 }

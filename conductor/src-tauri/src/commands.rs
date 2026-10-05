@@ -433,3 +433,85 @@ pub async fn git_push(cwd: String, set_upstream: bool) -> Result<String, String>
         .await
         .map_err(|e| e.to_string())?
 }
+
+// ---- Git: branches / remotes / stash / discard / merge (issue #6) ----
+
+#[tauri::command]
+pub fn git_branches(cwd: String) -> Result<Vec<crate::git::GitBranch>, String> {
+    Ok(crate::git::branches(&cwd))
+}
+
+#[tauri::command]
+pub fn git_checkout(cwd: String, branch: String, create: bool) -> Result<String, String> {
+    crate::git::checkout(&cwd, &branch, create)
+}
+
+#[tauri::command]
+pub fn git_create_branch(cwd: String, name: String, source: Option<String>) -> Result<String, String> {
+    crate::git::create_branch(&cwd, &name, source.as_deref())
+}
+
+#[tauri::command]
+pub fn git_delete_branch(cwd: String, name: String, force: bool) -> Result<String, String> {
+    crate::git::delete_branch(&cwd, &name, force)
+}
+
+#[tauri::command]
+pub fn git_remotes(cwd: String) -> Result<Vec<crate::git::GitRemote>, String> {
+    Ok(crate::git::remotes(&cwd))
+}
+
+#[tauri::command]
+pub fn git_stashes(cwd: String) -> Result<Vec<crate::git::GitStash>, String> {
+    Ok(crate::git::stashes(&cwd))
+}
+
+#[tauri::command]
+pub fn git_stash_push(cwd: String, message: Option<String>, include_untracked: bool) -> Result<String, String> {
+    crate::git::stash_push(&cwd, message.as_deref(), include_untracked)
+}
+
+#[tauri::command]
+pub fn git_stash_pop(cwd: String) -> Result<String, String> {
+    crate::git::stash_pop(&cwd)
+}
+
+#[tauri::command]
+pub fn git_stash_apply(cwd: String, index: usize) -> Result<String, String> {
+    crate::git::stash_apply(&cwd, index)
+}
+
+#[tauri::command]
+pub fn git_stash_drop(cwd: String, index: usize) -> Result<String, String> {
+    crate::git::stash_drop(&cwd, index)
+}
+
+#[tauri::command]
+pub fn git_discard(cwd: String, paths: Vec<String>, untracked: Vec<String>) -> Result<(), String> {
+    crate::git::discard(&cwd, &paths, &untracked)
+}
+
+#[tauri::command]
+pub fn git_discard_all(cwd: String) -> Result<(), String> {
+    crate::git::discard_all(&cwd)
+}
+
+#[tauri::command]
+pub fn git_merge(cwd: String, branch: String) -> Result<crate::git::GitOpResult, String> {
+    crate::git::merge(&cwd, &branch)
+}
+
+#[tauri::command]
+pub fn git_abort_merge(cwd: String) -> Result<String, String> {
+    crate::git::abort_merge(&cwd)
+}
+
+#[tauri::command]
+pub fn git_merge_in_progress(cwd: String) -> Result<bool, String> {
+    Ok(crate::git::merge_in_progress(&cwd))
+}
+
+#[tauri::command]
+pub fn git_cherry_pick(cwd: String, hash: String) -> Result<crate::git::GitOpResult, String> {
+    crate::git::cherry_pick(&cwd, &hash)
+}

@@ -100,7 +100,17 @@ impl Default for PtyState {
 /// A command running at least this long fires a "finished" notification (PRD §6.5).
 const LONG_COMMAND_MS: i64 = 10_000;
 
-fn now_ms() -> i64 {
+/// Project (group) name for a folder: its last path segment, so `$HOME` is
+/// your username. `/` has no segment, so it is named `/` instead of nothing.
+pub fn project_name(path: &str) -> Option<String> {
+    match std::path::Path::new(path).file_name() {
+        Some(n) => Some(n.to_string_lossy().into_owned()),
+        None if !path.is_empty() => Some(path.to_string()),
+        None => None,
+    }
+}
+
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -163,6 +173,11 @@ pub fn create_session(
     }
     // Inject OSC 133 shell-integration so the detector gets prompt/command markers.
     shell_integration::apply(&mut cmd, &shell_path);
+    // Without an explicit folder the PTY would inherit the app's own cwd,
+    // which is `/` when launched as a .app bundle — start in $HOME instead.
+    // Resolve it here so the session's cwd/project are known from the first
+    // frame (the group "+" and cap-dialog retry rely on `cwd` being set).
+    let cwd: Option<String> = cwd.or_else(|| std::env::var("HOME").ok());
     if let Some(dir) = cwd.as_ref() {
         cmd.cwd(dir);
     }
@@ -193,11 +208,7 @@ pub fn create_session(
             state: AttentionState::Running,
             // Seed from the spawn folder so the session is in the right project
             // group from the first frame; OSC 7 refines this if the shell cd's.
-            project: cwd
-                .as_deref()
-                .map(|d| std::path::Path::new(d))
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned()),
+            project: cwd.as_deref().and_then(project_name),
             cwd: cwd.clone(),
             command_count: 0,
             task_label: None,
@@ -287,10 +298,8 @@ fn process_state_events(
                 db::finish_latest_command(&conn, &ev.session, at, code, ev.command_text.as_deref());
             }
             if let Some(cwd) = &ev.cwd {
-                let name = std::path::Path::new(cwd)
-                    .file_name()
-                    .and_then(|n| n.to_str());
-                db::update_project(&conn, &ev.session, cwd, name);
+                let name = project_name(cwd);
+                db::update_project(&conn, &ev.session, cwd, name.as_deref());
             }
         }
         if let Some(dur) = long_finish {
@@ -486,10 +495,7 @@ impl SessionManager {
             }
             if let Some(cwd) = &ev.cwd {
                 s.cwd = Some(cwd.clone());
-                s.project = std::path::Path::new(cwd)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.to_string());
+                s.project = project_name(cwd);
             }
             s.name
                 .clone()
@@ -527,7 +533,6 @@ impl SessionManager {
         Ok(())
     }
 
-    #[allow(dead_code)] // used by the dashboard in Phase 2
     pub fn ids(&self) -> Vec<SessionId> {
         self.sessions.keys().cloned().collect()
     }
@@ -652,5 +657,18 @@ mod mem_tests {
         // Defensive: PID-reuse could in theory create a parent/child cycle.
         let t = table(&[(10, 11, 100), (11, 10, 200)]);
         assert_eq!(subtree_rss(10, &t), Some(300));
+    }
+}
+
+#[cfg(test)]
+mod project_name_tests {
+    use super::project_name;
+
+    #[test]
+    fn names_folders_and_root() {
+        assert_eq!(project_name("/Users/arun").as_deref(), Some("arun"));
+        assert_eq!(project_name("/Users/a/proj/").as_deref(), Some("proj"));
+        assert_eq!(project_name("/").as_deref(), Some("/"));
+        assert_eq!(project_name(""), None);
     }
 }

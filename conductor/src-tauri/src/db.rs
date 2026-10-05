@@ -229,14 +229,18 @@ fn now_ms() -> i64 {
 }
 
 /// On startup, close any sessions that were left open (app quit/crash without cleanup).
-/// No longer called — replaced by the session_snapshot table which manages open/closed
-/// state through snapshot lifecycle. Kept for reference.
-#[allow(dead_code)]
+///
+/// Must run before any new PTY is spawned. Restored tabs get brand-new session rows, so
+/// rows from a previous run never close on their own; left open, they'd span every day
+/// forever and inflate "time per project" and agent-blocked time in the daily summary.
+/// The close time is the last thing we saw the session do (state event or finished
+/// command), falling back to its creation time.
 pub fn reconcile_orphans(conn: &Connection) {
     let _ = conn.execute(
         "UPDATE session \
-         SET closed_at = COALESCE( \
-               (SELECT MAX(at) FROM state_event WHERE session_id = session.id), \
+         SET closed_at = max( \
+               COALESCE((SELECT MAX(at) FROM state_event WHERE session_id = session.id), 0), \
+               COALESCE((SELECT MAX(finished_at) FROM command WHERE session_id = session.id), 0), \
                created_at) \
          WHERE closed_at IS NULL",
         [],
@@ -653,18 +657,22 @@ pub fn daily_summary(conn: &Connection, since: i64, until: i64, cap_overrides: i
         )
         .unwrap_or(0);
 
-    // Sum WAITING intervals clipped to the window. Open WAITING (no following event) counts
-    // up to `until`. Uses LEAD() to find each event's successor per session.
+    // Sum WAITING intervals clipped to the window. A WAITING episode ends at the next
+    // state event, or when the session closed, or at `until` for a session that is still
+    // open and still waiting. Without the closed_at clip, a session whose last event was
+    // WAITING would keep accruing blocked time forever after it exited.
     let agent_blocked_ms = conn
         .query_row(
             "WITH ev AS ( \
-               SELECT session_id, state, at, \
-                      LEAD(at) OVER (PARTITION BY session_id ORDER BY at) AS next_at \
-               FROM state_event \
+               SELECT e.session_id, e.state, e.at, \
+                      COALESCE( \
+                        LEAD(e.at) OVER (PARTITION BY e.session_id ORDER BY e.at), \
+                        s.closed_at, ?2) AS end_at \
+               FROM state_event e JOIN session s ON s.id = e.session_id \
              ) \
-             SELECT COALESCE(SUM(min(COALESCE(next_at, ?2), ?2) - max(at, ?1)), 0) \
+             SELECT COALESCE(SUM(min(end_at, ?2) - max(at, ?1)), 0) \
              FROM ev \
-             WHERE state = 'WAITING' AND at < ?2 AND COALESCE(next_at, ?2) > ?1",
+             WHERE state = 'WAITING' AND at < ?2 AND end_at > ?1 AND end_at > at",
             params![since, until],
             |r| r.get(0),
         )
@@ -773,6 +781,67 @@ mod tests {
         insert_state_event(&c, "s1", AttentionState::Waiting, 4_000, StateSource::Pattern);
         let s = daily_summary(&c, 0, 10_000, 0);
         assert_eq!(s.agent_blocked_ms, 6_000);
+    }
+
+    #[test]
+    fn waiting_stops_accruing_when_session_closes() {
+        let db = DbState::memory().unwrap();
+        let c = db.0.lock().unwrap();
+        insert_session(&c, "s1", None, "/bin/zsh", 0, 1);
+        // Last event is WAITING, then the shell exits at 6_000 with no further event.
+        insert_state_event(&c, "s1", AttentionState::Waiting, 4_000, StateSource::Pattern);
+        mark_session_closed(&c, "s1", 6_000);
+        let s = daily_summary(&c, 0, 10_000, 0);
+        assert_eq!(s.agent_blocked_ms, 2_000); // 4_000..6_000, not 4_000..10_000
+        // And nothing at all in a later window.
+        let s = daily_summary(&c, 7_000, 20_000, 0);
+        assert_eq!(s.agent_blocked_ms, 0);
+    }
+
+    #[test]
+    fn reconcile_orphans_closes_stale_sessions_at_last_activity() {
+        let db = DbState::memory().unwrap();
+        let c = db.0.lock().unwrap();
+        let day: i64 = 1_000 * DAY_MS;
+        // A session from "yesterday" that was never closed (app quit without cleanup).
+        insert_session(&c, "old", None, "/bin/zsh", day - DAY_MS + 1_000, 1);
+        update_project(&c, "old", "/p", Some("proj"));
+        insert_command_start(&c, "old", day - DAY_MS + 2_000);
+        finish_latest_command(&c, "old", day - DAY_MS + 5_000, 0, Some("ls"));
+        insert_state_event(&c, "old", AttentionState::Waiting, day - DAY_MS + 3_000, StateSource::Pattern);
+        // A stale session with no activity at all closes at its creation time.
+        insert_session(&c, "empty", None, "/bin/zsh", day - DAY_MS + 7_000, 1);
+        update_project(&c, "empty", "/p", Some("proj"));
+
+        // Before reconcile: both stale rows span all of "today".
+        let s = daily_summary(&c, day, day + 3_600_000, 0);
+        assert_eq!(s.per_project[0].active_ms, 3_600_000);
+        assert_eq!(s.agent_blocked_ms, 3_600_000);
+
+        reconcile_orphans(&c);
+
+        let closed: i64 = c
+            .query_row("SELECT closed_at FROM session WHERE id = 'old'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(closed, day - DAY_MS + 5_000); // max(event 3_000, command 5_000)
+        let closed: i64 = c
+            .query_row("SELECT closed_at FROM session WHERE id = 'empty'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(closed, day - DAY_MS + 7_000);
+
+        // After reconcile: today is clean.
+        let s = daily_summary(&c, day, day + 3_600_000, 0);
+        assert!(s.per_project.is_empty());
+        assert_eq!(s.agent_blocked_ms, 0);
+
+        // Already-closed sessions are untouched.
+        insert_session(&c, "done", None, "/bin/zsh", 0, 1);
+        mark_session_closed(&c, "done", 42);
+        reconcile_orphans(&c);
+        let closed: i64 = c
+            .query_row("SELECT closed_at FROM session WHERE id = 'done'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(closed, 42);
     }
 
     #[test]

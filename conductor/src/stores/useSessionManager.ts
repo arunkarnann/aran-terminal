@@ -13,7 +13,17 @@ import {
   setSessionCap as apiSetSessionCap,
   setTaskLabel as apiSetTaskLabel,
 } from "../ipc/api";
+import { homeDir } from "@tauri-apps/api/path";
 import type { CapReachedEvent, SessionId, SessionMeta } from "../ipc/types";
+
+/** $HOME without a trailing slash, resolved once (null if unavailable). */
+let homeDirPromise: Promise<string | null> | null = null;
+function getHomeDir(): Promise<string | null> {
+  homeDirPromise ??= homeDir()
+    .then((d) => d.replace(/\/+$/, "") || "/")
+    .catch(() => null);
+  return homeDirPromise;
+}
 
 /** Given the session list before a close, choose which session to activate next. */
 function pickNextSession(
@@ -74,6 +84,9 @@ export function useSessionManager() {
   const [cap, setCap] = useState(5);
   const [capDialog, setCapDialog] = useState<CapDialogState | null>(null);
   const pendingCreateRef = useRef(false);
+  /** cwd of the create attempt that hit the cap, so the dialog's "raise limit" /
+   *  "close a session" actions retry in the folder the user clicked "+" from. */
+  const pendingCwdRef = useRef<string | null>(null);
   const sessionsRef = useRef(sessions);
   /** SessionId → serialized xterm.js scrollback (base64) for restore. */
   const [restoreScrollbacks, setRestoreScrollbacks] = useState<
@@ -160,17 +173,24 @@ export function useSessionManager() {
   const createSession = useCallback(async (cwd?: string) => {
     if (pendingCreateRef.current) return;
     pendingCreateRef.current = true;
+    pendingCwdRef.current = cwd ?? null;
     try {
+      // Resolve before spawning so no await sits between create and the append.
+      const home = cwd ? null : await getHomeDir();
       const id = await apiCreateSession(cwd ? { cwd } : undefined);
+      pendingCwdRef.current = null;
       const now = Date.now();
-      // Optimistically derive the project from the spawn folder so the new tab
-      // joins the right group immediately (the shell confirms it via OSC 7 soon).
-      const project = cwd ? cwd.split("/").filter(Boolean).pop() ?? null : null;
+      // Optimistically derive the project so the new tab joins the right group
+      // immediately instead of flashing in "Loose" (the backend confirms it via
+      // session meta / OSC 7 soon). No folder means the backend starts the
+      // shell in $HOME, so name it after the home folder.
+      const spawnDir = cwd ?? home;
+      const project = spawnDir ? spawnDir.split("/").filter(Boolean).pop() ?? "/" : null;
       const newSession: UiSession = {
         id,
         name: null,
         project,
-        cwd: cwd ?? null,
+        cwd: spawnDir,
         taskLabel: null,
         shell: "",
         createdAt: now,
@@ -295,19 +315,22 @@ export function useSessionManager() {
   const raiseCap = useCallback(async () => {
     await applyCap(cap + 1);
     setCapDialog(null);
-    void createSession();
+    void createSession(pendingCwdRef.current ?? undefined);
   }, [applyCap, cap, createSession]);
 
   const closeFromDialog = useCallback(
     async (id: SessionId) => {
       await closeSession(id);
       setCapDialog(null);
-      void createSession();
+      void createSession(pendingCwdRef.current ?? undefined);
     },
     [closeSession, createSession],
   );
 
-  const dismissDialog = useCallback(() => setCapDialog(null), []);
+  const dismissDialog = useCallback(() => {
+    pendingCwdRef.current = null;
+    setCapDialog(null);
+  }, []);
 
   return {
     sessions,

@@ -358,3 +358,345 @@ fn cap_diff(s: String) -> String {
     }
     lines.join("\n")
 }
+
+// ---- Branch management ----
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub current: bool,
+    pub remote: bool,
+    /// Upstream tracking ref (local branches only), e.g. "origin/main".
+    pub upstream: Option<String>,
+}
+
+/// Branch names are passed as argv (never through a shell), but reject anything
+/// git itself would refuse or that could be read as an option.
+fn valid_ref(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('-')
+        && !name.contains("..")
+        && !name.contains(char::is_whitespace)
+        && !name.chars().any(|c| matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+}
+
+/// List local and remote-tracking branches.
+pub fn branches(cwd: &str) -> Vec<GitBranch> {
+    if cwd.is_empty() || !is_repo(cwd) {
+        return Vec::new();
+    }
+    let fmt = "--format=%(HEAD)\x1f%(refname:short)\x1f%(upstream:short)";
+    let mut out = Vec::new();
+    if let Some(s) = run(cwd, &["branch", "--list", fmt]) {
+        for line in s.lines() {
+            let mut f = line.split('\x1f');
+            let head = f.next().unwrap_or("");
+            let Some(name) = f.next() else { continue };
+            if name.is_empty() || name.starts_with('(') {
+                continue; // detached HEAD marker
+            }
+            let up = f.next().unwrap_or("");
+            out.push(GitBranch {
+                name: name.to_string(),
+                current: head.trim() == "*",
+                remote: false,
+                upstream: if up.is_empty() { None } else { Some(up.to_string()) },
+            });
+        }
+    }
+    if let Some(s) = run(cwd, &["branch", "-r", "--list", "--format=%(refname:short)"]) {
+        for name in s.lines().map(str::trim).filter(|n| !n.is_empty()) {
+            if name.ends_with("/HEAD") {
+                continue;
+            }
+            out.push(GitBranch {
+                name: name.to_string(),
+                current: false,
+                remote: true,
+                upstream: None,
+            });
+        }
+    }
+    out
+}
+
+/// Check out a branch. For a remote-tracking ref (`origin/foo`) with no local
+/// counterpart, create a tracking local branch. With `create`, `git checkout -b`.
+pub fn checkout(cwd: &str, branch: &str, create: bool) -> Result<String, String> {
+    if !valid_ref(branch) {
+        return Err("invalid branch name".into());
+    }
+    if create {
+        return run_result(cwd, &["checkout", "-b", branch]);
+    }
+    run_result(cwd, &["checkout", branch])
+}
+
+/// Create a branch from `source` (defaults to HEAD) and switch to it.
+pub fn create_branch(cwd: &str, name: &str, source: Option<&str>) -> Result<String, String> {
+    if !valid_ref(name) {
+        return Err("invalid branch name".into());
+    }
+    match source.filter(|s| !s.is_empty()) {
+        Some(src) if !valid_ref(src) => Err("invalid source ref".into()),
+        Some(src) => run_result(cwd, &["checkout", "-b", name, src]),
+        None => run_result(cwd, &["checkout", "-b", name]),
+    }
+}
+
+/// Delete a local branch (`-D` when force). Refuses the current branch.
+pub fn delete_branch(cwd: &str, name: &str, force: bool) -> Result<String, String> {
+    if !valid_ref(name) {
+        return Err("invalid branch name".into());
+    }
+    let current = run(cwd, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    if current.trim() == name {
+        return Err("Cannot delete the checked-out branch".into());
+    }
+    run_result(cwd, &["branch", if force { "-D" } else { "-d" }, name])
+}
+
+// ---- Remote integration ----
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemote {
+    pub name: String,
+    /// Raw fetch URL as configured.
+    pub url: String,
+    /// Browsable https URL (GitHub/GitLab/Bitbucket ssh+https forms normalised).
+    pub web_url: Option<String>,
+}
+
+/// Convert a clone URL into a browsable https URL.
+pub fn web_url_for(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    let s = s.strip_suffix(".git").unwrap_or(s);
+    if let Some(rest) = s.strip_prefix("git@") {
+        // git@github.com:user/repo
+        let (host, path) = rest.split_once(':')?;
+        return Some(format!("https://{}/{}", host, path.trim_start_matches('/')));
+    }
+    if let Some(rest) = s.strip_prefix("ssh://") {
+        // ssh://git@github.com/user/repo
+        let rest = rest.split_once('@').map(|(_, r)| r).unwrap_or(rest);
+        let (host, path) = rest.split_once('/')?;
+        let host = host.split(':').next().unwrap_or(host);
+        return Some(format!("https://{}/{}", host, path));
+    }
+    if s.starts_with("https://") || s.starts_with("http://") {
+        // Strip embedded credentials: https://user:token@host/…
+        if let Some((scheme, rest)) = s.split_once("://") {
+            let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
+            return Some(format!("{}://{}", scheme, rest));
+        }
+    }
+    None
+}
+
+pub fn remotes(cwd: &str) -> Vec<GitRemote> {
+    if cwd.is_empty() || !is_repo(cwd) {
+        return Vec::new();
+    }
+    let Some(out) = run(cwd, &["remote", "-v"]) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut res = Vec::new();
+    for line in out.lines() {
+        let mut it = line.split_whitespace();
+        let (Some(name), Some(url)) = (it.next(), it.next()) else { continue };
+        if !seen.insert(name.to_string()) {
+            continue; // fetch/push pair — keep the first
+        }
+        res.push(GitRemote {
+            name: name.to_string(),
+            url: url.to_string(),
+            web_url: web_url_for(url),
+        });
+    }
+    res
+}
+
+// ---- Stash ----
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStash {
+    pub index: usize,
+    pub message: String,
+    pub relative: String,
+    pub timestamp: i64,
+}
+
+pub fn stashes(cwd: &str) -> Vec<GitStash> {
+    if cwd.is_empty() || !is_repo(cwd) {
+        return Vec::new();
+    }
+    let Some(out) = run(cwd, &["stash", "list", "--format=%gd\x1f%gs\x1f%cr\x1f%ct"]) else {
+        return Vec::new();
+    };
+    out.lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let mut f = line.split('\x1f');
+            let _ref = f.next()?;
+            let message = f.next()?.to_string();
+            Some(GitStash {
+                index: i,
+                message,
+                relative: f.next().unwrap_or("").to_string(),
+                timestamp: f.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+pub fn stash_push(cwd: &str, message: Option<&str>, include_untracked: bool) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["stash", "push"];
+    if include_untracked {
+        args.push("-u");
+    }
+    let msg = message.map(str::trim).filter(|m| !m.is_empty());
+    if let Some(m) = msg {
+        args.push("-m");
+        args.push(m);
+    }
+    run_result(cwd, &args)
+}
+
+fn stash_ref(index: usize) -> String {
+    format!("stash@{{{}}}", index)
+}
+
+pub fn stash_pop(cwd: &str) -> Result<String, String> {
+    run_result(cwd, &["stash", "pop"])
+}
+
+pub fn stash_apply(cwd: &str, index: usize) -> Result<String, String> {
+    run_result(cwd, &["stash", "apply", &stash_ref(index)])
+}
+
+pub fn stash_drop(cwd: &str, index: usize) -> Result<String, String> {
+    run_result(cwd, &["stash", "drop", &stash_ref(index)])
+}
+
+// ---- Discard ----
+
+/// Discard working-tree changes for the given paths (`git checkout -- <paths>`).
+/// Also restores deleted tracked files from HEAD. Untracked paths are removed.
+pub fn discard(cwd: &str, paths: &[String], untracked: &[String]) -> Result<(), String> {
+    if !paths.is_empty() {
+        let mut args: Vec<&str> = vec!["checkout", "--"];
+        let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        args.extend_from_slice(&refs);
+        run_result(cwd, &args)?;
+    }
+    if !untracked.is_empty() {
+        let mut args: Vec<&str> = vec!["clean", "-f", "--"];
+        let refs: Vec<&str> = untracked.iter().map(|s| s.as_str()).collect();
+        args.extend_from_slice(&refs);
+        run_result(cwd, &args)?;
+    }
+    Ok(())
+}
+
+/// Discard all unstaged changes (tracked files only).
+pub fn discard_all(cwd: &str) -> Result<(), String> {
+    run_result(cwd, &["checkout", "--", "."]).map(|_| ())
+}
+
+// ---- Merge / rebase / cherry-pick ----
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitOpResult {
+    pub ok: bool,
+    pub output: String,
+    /// Paths with unresolved conflicts after the operation.
+    pub conflicts: Vec<String>,
+    /// A merge / cherry-pick is still in progress (needs resolve + commit, or abort).
+    pub in_progress: bool,
+}
+
+fn conflicted_paths(cwd: &str) -> Vec<String> {
+    run(cwd, &["diff", "--name-only", "--diff-filter=U"])
+        .map(|s| s.lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default()
+}
+
+pub fn merge_in_progress(cwd: &str) -> bool {
+    let git_dir = run(cwd, &["rev-parse", "--git-dir"]).unwrap_or_default();
+    let git_dir = git_dir.trim();
+    if git_dir.is_empty() {
+        return false;
+    }
+    let base = if Path::new(git_dir).is_absolute() {
+        PathBuf::from(git_dir)
+    } else {
+        Path::new(cwd).join(git_dir)
+    };
+    base.join("MERGE_HEAD").exists() || base.join("CHERRY_PICK_HEAD").exists()
+}
+
+fn op_result(cwd: &str, r: Result<String, String>) -> GitOpResult {
+    let conflicts = conflicted_paths(cwd);
+    let in_progress = merge_in_progress(cwd);
+    match r {
+        Ok(o) => GitOpResult { ok: true, output: o, conflicts, in_progress },
+        Err(e) => GitOpResult { ok: false, output: e, conflicts, in_progress },
+    }
+}
+
+pub fn merge(cwd: &str, branch: &str) -> Result<GitOpResult, String> {
+    if !valid_ref(branch) {
+        return Err("invalid branch name".into());
+    }
+    Ok(op_result(cwd, run_result(cwd, &["merge", "--no-edit", branch])))
+}
+
+pub fn abort_merge(cwd: &str) -> Result<String, String> {
+    // Whichever is in progress.
+    run_result(cwd, &["merge", "--abort"])
+        .or_else(|_| run_result(cwd, &["cherry-pick", "--abort"]))
+}
+
+pub fn cherry_pick(cwd: &str, hash: &str) -> Result<GitOpResult, String> {
+    if !valid_hash(hash) {
+        return Err("invalid commit hash".into());
+    }
+    Ok(op_result(cwd, run_result(cwd, &["cherry-pick", hash])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_url_normalises_common_forms() {
+        assert_eq!(
+            web_url_for("git@github.com:arunkarnann/aran-terminal.git").as_deref(),
+            Some("https://github.com/arunkarnann/aran-terminal")
+        );
+        assert_eq!(
+            web_url_for("ssh://git@gitlab.com/group/repo.git").as_deref(),
+            Some("https://gitlab.com/group/repo")
+        );
+        assert_eq!(
+            web_url_for("https://user:tok@github.com/a/b.git").as_deref(),
+            Some("https://github.com/a/b")
+        );
+        assert_eq!(web_url_for("/local/path"), None);
+    }
+
+    #[test]
+    fn ref_validation_rejects_option_like_names() {
+        assert!(valid_ref("feat/thing-1"));
+        assert!(!valid_ref("-D"));
+        assert!(!valid_ref("a..b"));
+        assert!(!valid_ref("has space"));
+        assert!(!valid_ref(""));
+    }
+}
