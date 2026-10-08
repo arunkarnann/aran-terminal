@@ -41,6 +41,8 @@ interface SettingsProps {
   fontFamily: string;
   fontSize: number;
   restoreOnLaunch: boolean;
+  grouped: boolean;
+  onToggleGrouped: () => void;
   onApplyCap: (cap: number) => void;
   onFontChange: (family: string, size: number) => void;
   onToggleRestoreOnLaunch: () => void;
@@ -52,7 +54,7 @@ function themeBg(colors: { bg: string }): string {
   return colors.bg;
 }
 
-export function Settings({ cap, fontFamily, fontSize, restoreOnLaunch, onApplyCap, onFontChange, onToggleRestoreOnLaunch, onSave, onClose }: SettingsProps) {
+export function Settings({ cap, fontFamily, fontSize, restoreOnLaunch, grouped, onToggleGrouped, onApplyCap, onFontChange, onToggleRestoreOnLaunch, onSave, onClose }: SettingsProps) {
   const [draftCap, setDraftCap] = useState(cap);
   const [waitSecs, setWaitSecs] = useState(3);
   const { themeName, setTheme, availableThemes } = useTheme();
@@ -145,6 +147,23 @@ export function Settings({ cap, fontFamily, fontSize, restoreOnLaunch, onApplyCa
           Once a session prints a prompt (e.g. a “(y/n)” question), how long it stays
           quiet before it's flagged as needing you. Lower = more responsive; higher =
           fewer false alarms.
+        </p>
+
+        <div className="setting-row">
+          <label htmlFor="group-tabs">Group tabs by folder</label>
+          <button
+            id="group-tabs"
+            role="switch"
+            aria-checked={grouped}
+            className={`switch ${grouped ? "switch--on" : ""}`}
+            onClick={onToggleGrouped}
+            title={grouped ? "On" : "Off"}
+          >
+            <span className="switch-knob" />
+          </button>
+        </div>
+        <p className="dialog-body">
+          Collapse tabs into one pill per project folder in the top bar.
         </p>
 
         <div className="setting-row">

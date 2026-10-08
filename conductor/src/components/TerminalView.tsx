@@ -6,7 +6,6 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { fontProbe, primaryFamily } from "../lib/fonts";
 import { ageTier } from "../lib/ui";
 import { useNow } from "../lib/useNow";
-import { getProjectColor, useProjectColors } from "../lib/projectColors";
 import "@xterm/xterm/css/xterm.css";
 import {
   decodePtyBytes,
@@ -85,7 +84,6 @@ export function TerminalView({
   visible,
   state,
   cwd,
-  project,
   createdAt,
   fontFamily,
   fontSize,
@@ -142,9 +140,6 @@ export function TerminalView({
   const now = useNow(30_000);
   const ageClass = `terminal-host--age-${ageTier(Math.max(0, now - createdAt))}`;
 
-  // Project color (thin top accent), reactive to user color changes.
-  useProjectColors();
-  const projectColor = getProjectColor(project);
 
   // Rendered autocomplete UI.
   const [ghost, setGhost] = useState<GhostUI | null>(null);
@@ -591,9 +586,6 @@ export function TerminalView({
       ref={hostRef}
     >
       <div className="terminal-grid" />
-      {project && (
-        <div className="terminal-project-accent" style={{ background: projectColor }} aria-hidden />
-      )}
       {blocksReady && sessionId && termRef.current && trackerRef.current && hostRef.current && (
         <BlockLayer
           term={termRef.current}

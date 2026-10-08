@@ -470,21 +470,28 @@ pub struct GitRemote {
     pub web_url: Option<String>,
 }
 
-/// Convert a clone URL into a browsable https URL.
+/// Convert a clone URL into a browsable https URL. SSH host aliases from
+/// `~/.ssh/config` (e.g. `git@github-work:org/repo`) resolve to their real HostName.
 pub fn web_url_for(raw: &str) -> Option<String> {
+    web_url_with(raw, ssh_hostname)
+}
+
+/// `web_url_for` with an injectable SSH alias resolver (for tests).
+fn web_url_with(raw: &str, resolve: impl Fn(&str) -> Option<String>) -> Option<String> {
     let s = raw.trim();
     let s = s.strip_suffix(".git").unwrap_or(s);
+    let real_host = |host: &str| resolve(host).unwrap_or_else(|| host.to_string());
     if let Some(rest) = s.strip_prefix("git@") {
         // git@github.com:user/repo
         let (host, path) = rest.split_once(':')?;
-        return Some(format!("https://{}/{}", host, path.trim_start_matches('/')));
+        return Some(format!("https://{}/{}", real_host(host), path.trim_start_matches('/')));
     }
     if let Some(rest) = s.strip_prefix("ssh://") {
         // ssh://git@github.com/user/repo
         let rest = rest.split_once('@').map(|(_, r)| r).unwrap_or(rest);
         let (host, path) = rest.split_once('/')?;
         let host = host.split(':').next().unwrap_or(host);
-        return Some(format!("https://{}/{}", host, path));
+        return Some(format!("https://{}/{}", real_host(host), path));
     }
     if s.starts_with("https://") || s.starts_with("http://") {
         // Strip embedded credentials: https://user:token@host/…
@@ -494,6 +501,41 @@ pub fn web_url_for(raw: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Real HostName for an SSH alias, via `ssh -G` (evaluates ~/.ssh/config only — no
+/// connection is made). Cached per process; None if ssh can't say.
+fn ssh_hostname(alias: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+
+    // Only plain host tokens; a leading '-' would be read as an ssh option.
+    let valid = !alias.is_empty()
+        && !alias.starts_with('-')
+        && alias.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if !valid {
+        return None;
+    }
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(alias).cloned()) {
+        return hit;
+    }
+    let resolved = Command::new("/usr/bin/ssh")
+        .args(["-G", alias])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .find_map(|l| l.strip_prefix("hostname ").map(|h| h.trim().to_string()))
+        })
+        .filter(|h| !h.is_empty());
+    if let Ok(mut c) = cache.lock() {
+        c.insert(alias.to_string(), resolved.clone());
+    }
+    resolved
 }
 
 pub fn remotes(cwd: &str) -> Vec<GitRemote> {
@@ -689,6 +731,25 @@ mod tests {
             Some("https://github.com/a/b")
         );
         assert_eq!(web_url_for("/local/path"), None);
+    }
+
+    #[test]
+    fn web_url_resolves_ssh_host_aliases() {
+        let resolve = |h: &str| (h == "github-arunkarnan").then(|| "github.com".to_string());
+        assert_eq!(
+            web_url_with("git@github-arunkarnan:Visist-ai/SportsIntelligence-backend.git", resolve).as_deref(),
+            Some("https://github.com/Visist-ai/SportsIntelligence-backend")
+        );
+        assert_eq!(
+            web_url_with("ssh://git@github-arunkarnan/o/r.git", resolve).as_deref(),
+            Some("https://github.com/o/r")
+        );
+        // Unknown hosts are kept as-is.
+        assert_eq!(
+            web_url_with("git@gitlab.com:g/r.git", resolve).as_deref(),
+            Some("https://gitlab.com/g/r")
+        );
+        assert_eq!(ssh_hostname("-oProxyCommand=x"), None, "option-like aliases rejected");
     }
 
     #[test]

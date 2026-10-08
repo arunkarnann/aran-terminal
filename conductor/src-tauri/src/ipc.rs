@@ -178,3 +178,159 @@ pub struct SessionSnapshotWithScrollback {
     /// base64-encoded serialized xterm.js buffer, or null.
     pub scrollback_base64: Option<String>,
 }
+
+/// A to-do item in the Tasks sidebar. `status` is one of
+/// "backlog" | "todo" | "in_progress" | "review" | "blocked" | "done".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub notes: String,
+    pub status: String,
+    /// 0 (urgent) .. 3 (low).
+    pub priority: i64,
+    pub project: Option<String>,
+    pub due_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// Backend-owned: first entry into in_progress.
+    pub started_at: Option<i64>,
+    /// Backend-owned: set on entering done, cleared on leaving it.
+    pub completed_at: Option<i64>,
+}
+
+/// One entry in a task's timeline (creation or status change).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskEvent {
+    pub from_status: Option<String>,
+    pub to_status: String,
+    pub at: i64,
+}
+
+// ---- GitHub issues sidebar ----
+
+/// A GitHub account usable by the Issues pane. `via` is "gh" (token held by the gh CLI)
+/// or "token" (pasted PAT kept in the macOS Keychain). Tokens never cross IPC.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhAccount {
+    pub login: String,
+    pub via: String,
+    /// None when scopes are unknown (fine-grained tokens).
+    pub scopes: Option<Vec<String>>,
+    /// Scopes allow reading Projects v2 (true when unknown — the API will tell).
+    pub can_projects: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhRepoInfo {
+    pub full_name: String,
+    pub url: String,
+    pub private: bool,
+    pub description: Option<String>,
+    pub pushed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhProjectInfo {
+    /// GraphQL node id.
+    pub id: String,
+    pub title: String,
+    pub number: i64,
+    pub owner: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhProjectList {
+    pub projects: Vec<GhProjectInfo>,
+    /// Partial failures (e.g. an org behind SAML SSO) — shown, not fatal.
+    pub notices: Vec<String>,
+}
+
+/// A selected repo or project. `kind` is "repo" | "project"; `key` is the repo's
+/// "owner/name" or the project's node id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhSourceInput {
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhSource {
+    pub id: String,
+    pub account: String,
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub url: Option<String>,
+    /// Project status column order (empty for repos).
+    pub status_options: Vec<String>,
+    pub synced_at: Option<i64>,
+    /// Last sync error, if any.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhLabel {
+    pub name: String,
+    /// Validated "#rrggbb" or None.
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhField {
+    pub name: String,
+    pub value: String,
+}
+
+/// An issue, PR or project draft cached locally.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhItem {
+    pub source_id: String,
+    /// "owner/repo#123", or "draft:<node id>" for project drafts.
+    pub item_key: String,
+    /// "issue" | "pr" | "draft".
+    pub kind: String,
+    pub repo: Option<String>,
+    pub number: Option<i64>,
+    pub title: String,
+    /// "open" | "closed" | "merged".
+    pub state: String,
+    pub url: Option<String>,
+    pub author: Option<String>,
+    pub assignees: Vec<String>,
+    pub labels: Vec<GhLabel>,
+    pub comments: i64,
+    /// Epoch ms.
+    pub updated_at: i64,
+    /// Project status column value (projects only).
+    pub status: Option<String>,
+    /// Other project fields (priority, iteration, …).
+    pub fields: Vec<GhField>,
+    /// Plain text; rendered as text, never HTML.
+    pub body: String,
+    /// Epoch ms. `default` keeps rows cached before these fields existed readable.
+    #[serde(default)]
+    pub created_at: i64,
+    /// Last edit of the title/body (epoch ms), if ever edited.
+    #[serde(default)]
+    pub edited_at: Option<i64>,
+    /// Newest comment (epoch ms) and its author.
+    #[serde(default)]
+    pub last_comment_at: Option<i64>,
+    #[serde(default)]
+    pub last_comment_by: Option<String>,
+}

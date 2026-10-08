@@ -3,12 +3,15 @@ import { CapDialog } from "./components/CapDialog";
 import { Dashboard } from "./components/Dashboard";
 import { DailySummary } from "./components/DailySummary";
 import { GitPanel } from "./components/GitPanel";
+import { IssuesPanel } from "./components/IssuesPanel";
+import { Sidebar, visiblePane, type SidebarPane, type SidebarSide, type SidebarTab } from "./components/Sidebar";
+import { TaskPanel } from "./components/TaskPanel";
 import { PermissionsSetup } from "./components/PermissionsSetup";
 import { Settings } from "./components/Settings";
 import { StatusBar } from "./components/StatusBar";
 import { TabGroups } from "./components/TabGroups";
 import { TabStrip, groupSessions } from "./components/TabStrip";
-import { IconCalendar, IconDashboard, IconLayers, IconSettings } from "./components/Icons";
+import { IconCalendar, IconDashboard, IconIssue, IconListChecks, IconSettings } from "./components/Icons";
 import { useWindowWidth } from "./lib/useTabDensity";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -52,6 +55,91 @@ function App() {
   const mgr = useSessionManager();
   const [showDashboard, setShowDashboard] = useState(true);
   const [showGit, setShowGit] = useState(false);
+  const [showTasks, setShowTasks] = useState(() => {
+    try {
+      return localStorage.getItem("conductor-tasks-open") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(() => {
+    try {
+      const t = localStorage.getItem("conductor-sidebar-tab");
+      return t === "tasks" || t === "issues" ? t : "dashboard";
+    } catch {
+      return "dashboard";
+    }
+  });
+  const [sidebarSide, setSidebarSide] = useState<SidebarSide>(() => {
+    try {
+      return localStorage.getItem("conductor-sidebar-side") === "right" ? "right" : "left";
+    } catch {
+      return "left";
+    }
+  });
+  const toggleSidebarSide = useCallback(() => {
+    setSidebarSide((v) => {
+      const n: SidebarSide = v === "left" ? "right" : "left";
+      try {
+        localStorage.setItem("conductor-sidebar-side", n);
+      } catch {
+        /* ignore */
+      }
+      return n;
+    });
+  }, []);
+  const pickSidebarTab = useCallback((t: SidebarTab) => {
+    setSidebarTab(t);
+    try {
+      localStorage.setItem("conductor-sidebar-tab", t);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const setTasksOpen = useCallback(
+    (open: boolean) => {
+      setShowTasks(open);
+      if (open) pickSidebarTab("tasks");
+      try {
+        localStorage.setItem("conductor-tasks-open", open ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+    },
+    [pickSidebarTab],
+  );
+  const [showIssues, setShowIssues] = useState(() => {
+    try {
+      return localStorage.getItem("conductor-issues-open") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleIssues = useCallback(() => {
+    const open = !showIssues;
+    setShowIssues(open);
+    if (open) pickSidebarTab("issues");
+    try {
+      localStorage.setItem("conductor-issues-open", open ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [showIssues, pickSidebarTab]);
+  const enabledPanes: SidebarTab[] = [
+    ...(showDashboard ? (["dashboard"] as const) : []),
+    ...(showTasks ? (["tasks"] as const) : []),
+    ...(showIssues ? (["issues"] as const) : []),
+  ];
+  const enabledPanesRef = useRef(enabledPanes);
+  enabledPanesRef.current = enabledPanes;
+  // Topbar switch: plain on/off (turning on brings the Tasks tab forward).
+  const toggleTasks = useCallback(() => setTasksOpen(!showTasks), [setTasksOpen, showTasks]);
+  const toggleDashboard = useCallback(() => {
+    setShowDashboard((v) => {
+      if (!v) pickSidebarTab("dashboard");
+      return !v;
+    });
+  }, [pickSidebarTab]);
   const [showSummary, setShowSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // First-launch macOS permissions onboarding (issue #3) — shown once, always
@@ -73,9 +161,10 @@ function App() {
   }, []);
   const [grouped, setGrouped] = useState(() => {
     try {
-      return localStorage.getItem("conductor-tab-group") === "1";
+      // Grouped by default; only an explicit "off" in Settings disables it.
+      return localStorage.getItem("conductor-tab-group") !== "0";
     } catch {
-      return false;
+      return true;
     }
   });
   const toggleGrouped = useCallback(() => {
@@ -273,7 +362,14 @@ function App() {
     const onKey = (e: KeyboardEvent) => {
       if (!e.metaKey || e.altKey || e.ctrlKey) return;
       const k = e.key.toLowerCase();
-      if (k === "n") {
+      if (k === "j" && !e.shiftKey) {
+        // ⌘J: show Tasks; if it's open but behind another tab, bring it forward
+        // instead of hiding it.
+        e.preventDefault();
+        const enabled = enabledPanesRef.current;
+        if (showTasks && visiblePane(enabled, sidebarTab) !== "tasks") pickSidebarTab("tasks");
+        else setTasksOpen(!showTasks);
+      } else if (k === "n") {
         e.preventDefault();
         void mgr.createSession();
       } else if (k === "t") {
@@ -283,7 +379,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mgr, activeSession]);
+  }, [mgr, activeSession, showTasks, sidebarTab, pickSidebarTab, setTasksOpen]);
 
   const handleZoom = useCallback((size: number) => {
     setFontSize(size);
@@ -343,7 +439,7 @@ function App() {
   // bar would get cramped. Measured against the *expanded* actions width so it
   // doesn't flip back and forth at the threshold.
   const winWidth = useWindowWidth();
-  const EXPANDED_ACTIONS_PX = 540;
+  const EXPANDED_ACTIONS_PX = 620;
   const foldActions = grouped
     ? winWidth - EXPANDED_ACTIONS_PX < groupSessions(mgr.sessions).length * 150 + 110
     : winWidth - EXPANDED_ACTIONS_PX < (mgr.sessions.length + 1) * 140;
@@ -354,26 +450,33 @@ function App() {
         <IconCalendar />
         <span className="tb-label">Today</span>
       </button>
-      <button className="tb-btn" onClick={openSettings} title="Settings">
-        <IconSettings />
-        <span className="tb-label">Settings</span>
+      <button
+        className={`tb-btn tb-btn--toggle ${showTasks ? "tb-btn--on" : ""}`}
+        role="switch"
+        aria-checked={showTasks}
+        onClick={toggleTasks}
+        title="Tasks (⌘J)"
+      >
+        <IconListChecks />
+        <span className="tb-label">Tasks</span>
+        <span className="tb-switch" aria-hidden="true" />
       </button>
       <button
-        className={`tb-btn tb-btn--toggle ${grouped ? "tb-btn--on" : ""}`}
+        className={`tb-btn tb-btn--toggle ${showIssues ? "tb-btn--on" : ""}`}
         role="switch"
-        aria-checked={grouped}
-        onClick={toggleGrouped}
-        title="Group tabs by folder"
+        aria-checked={showIssues}
+        onClick={toggleIssues}
+        title="GitHub issues"
       >
-        <IconLayers />
-        <span className="tb-label">Groups</span>
+        <IconIssue />
+        <span className="tb-label">Issues</span>
         <span className="tb-switch" aria-hidden="true" />
       </button>
       <button
         className={`tb-btn tb-btn--toggle ${showDashboard ? "tb-btn--on" : ""}`}
         role="switch"
         aria-checked={showDashboard}
-        onClick={() => setShowDashboard((v) => !v)}
+        onClick={toggleDashboard}
         title="Dashboard"
       >
         <IconDashboard />
@@ -381,7 +484,63 @@ function App() {
         {waitingCount > 0 && <span className="tb-badge">{waitingCount}</span>}
         <span className="tb-switch" aria-hidden="true" />
       </button>
+      <button className="tb-btn tb-btn--icon" onClick={openSettings} title="Settings" aria-label="Settings">
+        <IconSettings />
+      </button>
     </div>
+  );
+
+  const sidebarPanes: SidebarPane[] = [
+    ...(showDashboard
+      ? [
+          {
+            id: "dashboard" as const,
+            label: "Dashboard",
+            icon: <IconDashboard size={12} />,
+            badge: waitingCount,
+            node: (
+              <Dashboard
+                sessions={mgr.sessions}
+                activeSessionId={mgr.activeSessionId}
+                onFocus={mgr.switchSession}
+                onSetLabel={mgr.setTaskLabel}
+                onClose={mgr.closeSession}
+                onOpenToday={() => setShowSummary(true)}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(showTasks
+      ? [
+          {
+            id: "tasks" as const,
+            label: "Tasks",
+            icon: <IconListChecks size={12} />,
+            node: <TaskPanel project={activeSession?.project ?? null} onClose={toggleTasks} />,
+          },
+        ]
+      : []),
+    ...(showIssues
+      ? [
+          {
+            id: "issues" as const,
+            label: "Issues",
+            icon: <IconIssue size={12} />,
+            node: <IssuesPanel cwd={activeSession?.cwd ?? null} />,
+          },
+        ]
+      : []),
+  ];
+
+  const sidebar = (
+    <Sidebar
+      panes={sidebarPanes}
+      tab={sidebarTab}
+      onTabChange={pickSidebarTab}
+      side={sidebarSide}
+      onToggleSide={toggleSidebarSide}
+    />
   );
 
   return (
@@ -413,6 +572,7 @@ function App() {
       )}
 
       <div className="body">
+        {sidebarSide === "left" && sidebar}
         <main className="workspace">
           {mgr.sessions.length === 0 && (
             <div className="empty-state">
@@ -444,16 +604,7 @@ function App() {
             onClose={() => setShowGit(false)}
           />
         )}
-        {showDashboard && (
-          <Dashboard
-            sessions={mgr.sessions}
-            activeSessionId={mgr.activeSessionId}
-            onFocus={mgr.switchSession}
-            onSetLabel={mgr.setTaskLabel}
-            onClose={mgr.closeSession}
-            onOpenToday={() => setShowSummary(true)}
-          />
-        )}
+        {sidebarSide === "right" && sidebar}
       </div>
 
       <StatusBar
@@ -495,6 +646,8 @@ function App() {
           fontFamily={fontFamily}
           fontSize={fontSize}
           restoreOnLaunch={restoreOnLaunch}
+          grouped={grouped}
+          onToggleGrouped={toggleGrouped}
           onApplyCap={mgr.applyCap}
           onFontChange={handleFontChange}
           onToggleRestoreOnLaunch={toggleRestoreOnLaunch}

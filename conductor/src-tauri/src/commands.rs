@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use base64::Engine;
 use crate::db::DbState;
-use crate::ipc::{FocusBlock, FocusDay, HistoryEntry, SessionId, SessionMeta, SessionSnapshot, SessionSnapshotWithScrollback, Summary};
+use crate::ipc::{FocusBlock, FocusDay, HistoryEntry, SessionId, SessionMeta, SessionSnapshot, SessionSnapshotWithScrollback, Summary, Task, TaskEvent, GhAccount, GhItem, GhProjectList, GhRepoInfo, GhSource, GhSourceInput};
 use crate::pty::{DetectionState, PtyState};
 
 /// Default daily focus goal when the user hasn't set one: 2 hours.
@@ -514,4 +514,258 @@ pub fn git_merge_in_progress(cwd: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn git_cherry_pick(cwd: String, hash: String) -> Result<crate::git::GitOpResult, String> {
     crate::git::cherry_pick(&cwd, &hash)
+}
+
+// ---- Tasks sidebar ----
+
+const TASK_STATUSES: &[&str] = &["backlog", "todo", "in_progress", "review", "blocked", "done"];
+
+fn validate_task(t: &Task) -> Result<(), String> {
+    if t.title.trim().is_empty() {
+        return Err("task title is empty".into());
+    }
+    if !TASK_STATUSES.contains(&t.status.as_str()) {
+        return Err(format!("unknown task status: {}", t.status));
+    }
+    Ok(())
+}
+
+/// All open tasks plus those finished at/after `done_since` (epoch ms, chosen by the
+/// frontend so "recently done" follows the local day).
+#[tauri::command]
+pub fn list_tasks(db: State<DbState>, done_since: i64) -> Result<Vec<Task>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::list_tasks(&conn, done_since).map_err(|e| e.to_string())
+}
+
+/// Create a task. `id`, timestamps and lifecycle stamps are assigned by the backend.
+#[tauri::command]
+pub fn create_task(db: State<DbState>, task: Task) -> Result<Task, String> {
+    validate_task(&task)?;
+    let task = Task {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: task.title.trim().to_string(),
+        priority: task.priority.clamp(0, 3),
+        ..task
+    };
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::insert_task(&conn, &task, now_ms()).map_err(|e| e.to_string())
+}
+
+/// Whole-row update; the backend logs status changes to the timeline.
+#[tauri::command]
+pub fn update_task(db: State<DbState>, task: Task) -> Result<Task, String> {
+    validate_task(&task)?;
+    let task = Task {
+        title: task.title.trim().to_string(),
+        priority: task.priority.clamp(0, 3),
+        ..task
+    };
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::update_task(&conn, &task, now_ms())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())
+}
+
+#[tauri::command]
+pub fn delete_task(db: State<DbState>, id: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::delete_task(&conn, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn task_events(db: State<DbState>, id: String) -> Result<Vec<TaskEvent>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::task_events(&conn, &id).map_err(|e| e.to_string())
+}
+
+// ---- GitHub issues sidebar ----
+//
+// Network work runs on blocking threads (spawn_blocking) and never holds the DB lock.
+// Tokens are fetched per call from gh / the Keychain and never returned over IPC.
+
+const GH_ACCOUNT_KEY: &str = "gh.account";
+/// JSON array of logins whose pasted PAT lives in the Keychain.
+const GH_TOKEN_LOGINS_KEY: &str = "gh.token_logins";
+
+type SharedDb = std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>;
+
+fn gh_token_logins(db: &SharedDb) -> Result<Vec<String>, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    Ok(crate::db::get_setting(&conn, GH_TOKEN_LOGINS_KEY)
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default())
+}
+
+fn gh_client_for(db: &SharedDb, account: &str) -> Result<crate::github::Client, String> {
+    let token = if gh_token_logins(db)?.iter().any(|l| l == account) {
+        crate::github::keychain_get(account)?
+    } else {
+        crate::github::gh_token(account)?
+    };
+    Ok(crate::github::Client::new(token))
+}
+
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Accounts from the gh CLI plus pasted-token accounts.
+#[tauri::command]
+pub async fn gh_accounts(db: State<'_, DbState>) -> Result<Vec<GhAccount>, String> {
+    let db = db.0.clone();
+    blocking(move || {
+        let mut out: Vec<GhAccount> = crate::github::gh_cli_accounts()
+            .into_iter()
+            .map(|a| GhAccount {
+                can_projects: a
+                    .scopes
+                    .as_deref()
+                    .is_none_or(crate::github::scopes_allow_projects),
+                login: a.login,
+                via: "gh".into(),
+                scopes: a.scopes,
+            })
+            .collect();
+        for login in gh_token_logins(&db)? {
+            if !out.iter().any(|a| a.login == login) {
+                out.push(GhAccount { login, via: "token".into(), scopes: None, can_projects: true });
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn gh_get_account(db: State<DbState>) -> Result<Option<String>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    Ok(crate::db::get_setting(&conn, GH_ACCOUNT_KEY))
+}
+
+#[tauri::command]
+pub fn gh_set_account(db: State<DbState>, login: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::set_setting(&conn, GH_ACCOUNT_KEY, &login);
+    Ok(())
+}
+
+/// Validate a pasted personal access token and keep it in the macOS Keychain.
+#[tauri::command]
+pub async fn gh_add_token(db: State<'_, DbState>, token: String) -> Result<GhAccount, String> {
+    let db = db.0.clone();
+    blocking(move || {
+        let token = token.trim().to_string();
+        if token.is_empty() {
+            return Err("token is empty".into());
+        }
+        let (login, scopes) = crate::github::Client::new(token.clone()).whoami()?;
+        crate::github::keychain_set(&login, &token)?;
+        let mut logins = gh_token_logins(&db)?;
+        if !logins.contains(&login) {
+            logins.push(login.clone());
+        }
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        crate::db::set_setting(&conn, GH_TOKEN_LOGINS_KEY, &serde_json::to_string(&logins).unwrap_or_default());
+        Ok(GhAccount {
+            can_projects: scopes.as_deref().is_none_or(crate::github::scopes_allow_projects),
+            login,
+            via: "token".into(),
+            scopes,
+        })
+    })
+    .await
+}
+
+/// Forget a pasted-token account (Keychain entry + selection + cache).
+#[tauri::command]
+pub fn gh_remove_token(db: State<DbState>, login: String) -> Result<(), String> {
+    crate::github::keychain_delete(&login);
+    let shared = db.0.clone();
+    let logins: Vec<String> = gh_token_logins(&shared)?.into_iter().filter(|l| *l != login).collect();
+    let mut conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::set_setting(&conn, GH_TOKEN_LOGINS_KEY, &serde_json::to_string(&logins).unwrap_or_default());
+    crate::db::gh_set_sources(&mut conn, &login, &[], now_ms()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn gh_list_repos(db: State<'_, DbState>, account: String) -> Result<Vec<GhRepoInfo>, String> {
+    let db = db.0.clone();
+    blocking(move || gh_client_for(&db, &account)?.list_repos()).await
+}
+
+#[tauri::command]
+pub async fn gh_list_projects(db: State<'_, DbState>, account: String) -> Result<GhProjectList, String> {
+    let db = db.0.clone();
+    blocking(move || {
+        gh_client_for(&db, &account)?
+            .list_projects()
+            .map_err(|e| e.replace("<account>", &account))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn gh_sources(db: State<DbState>, account: String) -> Result<Vec<GhSource>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::gh_sources(&conn, &account).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn gh_set_sources(
+    db: State<DbState>,
+    account: String,
+    sources: Vec<GhSourceInput>,
+) -> Result<Vec<GhSource>, String> {
+    if let Some(bad) = sources.iter().find(|s| s.kind != "repo" && s.kind != "project") {
+        return Err(format!("unknown source kind: {}", bad.kind));
+    }
+    let mut conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::gh_set_sources(&mut conn, &account, &sources, now_ms()).map_err(|e| e.to_string())
+}
+
+/// Refresh every selected source of `account`. Per-source failures are recorded on the
+/// source (shown in the UI) instead of failing the whole sync.
+#[tauri::command]
+pub async fn gh_sync(db: State<'_, DbState>, account: String) -> Result<Vec<GhSource>, String> {
+    let db = db.0.clone();
+    blocking(move || {
+        let sources = {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            crate::db::gh_sources(&conn, &account).map_err(|e| e.to_string())?
+        };
+        let client = gh_client_for(&db, &account)?;
+        for s in &sources {
+            let fetched = if s.kind == "project" {
+                client.project_items(&s.id, &s.key)
+            } else {
+                client.repo_items(&s.id, &s.key).map(|items| (items, Vec::new()))
+            };
+            let mut conn = db.lock().map_err(|e| e.to_string())?;
+            match fetched {
+                Ok((items, opts)) => {
+                    crate::db::gh_replace_items(&mut conn, &s.id, &items, &opts, now_ms())
+                        .map_err(|e| e.to_string())?;
+                }
+                Err(e) => {
+                    let e = e.replace("<account>", &account);
+                    crate::db::gh_set_source_error(&conn, &s.id, &e).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        crate::db::gh_sources(&conn, &account).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn gh_items(db: State<DbState>, account: String) -> Result<Vec<GhItem>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::db::gh_items(&conn, &account).map_err(|e| e.to_string())
 }

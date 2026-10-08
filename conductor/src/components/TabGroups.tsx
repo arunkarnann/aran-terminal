@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import type { SessionId, SessionMeta } from "../ipc/types";
 import { Tab, TabGroup, groupSessions } from "./TabStrip";
 import { useNow } from "../lib/useNow";
-import { getProjectColor, useProjectColors } from "../lib/projectColors";
+import { getProjectColor, inkOn, useProjectColors } from "../lib/projectColors";
 import { tabDensity, useElementWidth } from "../lib/useTabDensity";
 import { IconPlus, IconX } from "./Icons";
 
@@ -72,7 +72,7 @@ export function TabGroups({
               role="button"
               tabIndex={0}
               className={`tab2-group ${active ? "tab2-group--on" : ""}`}
-              style={{ "--tab-color": color } as CSSProperties}
+              style={{ "--tab-color": color, "--tab-ink": inkOn(color) } as CSSProperties}
               onClick={() => {
                 if (active) return;
                 const lastId = lastActiveRef.current[g.key];

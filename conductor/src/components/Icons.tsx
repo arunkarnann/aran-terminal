@@ -94,3 +94,126 @@ export const IconTag = (p: IconProps) => (
     <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
   </Svg>
 );
+
+export const IconListChecks = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m3 17 2 2 4-4" />
+    <path d="m3 7 2 2 4-4" />
+    <path d="M13 6h8" />
+    <path d="M13 12h8" />
+    <path d="M13 18h8" />
+  </Svg>
+);
+
+/** Panel docked to one side; `flip` mirrors it to point at the right edge. */
+export const IconPanelSide = ({ flip, ...p }: IconProps & { flip?: boolean }) => (
+  <Svg {...p}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d={flip ? "M15 3v18" : "M9 3v18"} />
+  </Svg>
+);
+
+export const IconIssue = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+  </Svg>
+);
+
+// ---- GitHub item icons (Octicon-like geometry, stroke style) ----
+
+export const IconIssueClosed = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m8.5 12 2.5 2.5 4.5-5" />
+  </Svg>
+);
+
+export const IconIssueDraft = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" strokeDasharray="3 3" />
+  </Svg>
+);
+
+export const IconPullRequest = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="6" cy="6" r="2.5" />
+    <circle cx="6" cy="18" r="2.5" />
+    <circle cx="18" cy="18" r="2.5" />
+    <path d="M6 8.5v7" />
+    <path d="M18 15.5V9a3 3 0 0 0-3-3h-4" />
+    <path d="m13 3.5-2.5 2.5L13 8.5" />
+  </Svg>
+);
+
+export const IconMerged = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="6" cy="6" r="2.5" />
+    <circle cx="6" cy="18" r="2.5" />
+    <circle cx="18" cy="12" r="2.5" />
+    <path d="M6 8.5v7" />
+    <path d="M6 8.5a6 6 0 0 0 6 3.5h3.5" />
+  </Svg>
+);
+
+export const IconComment = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12z" />
+  </Svg>
+);
+
+export const IconClock = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </Svg>
+);
+
+export const IconRefresh = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16" />
+    <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8" />
+    <path d="M21 3v5h-5" />
+    <path d="M3 21v-5h5" />
+  </Svg>
+);
+
+export const IconExternal = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 4h6v6" />
+    <path d="M20 4 11 13" />
+    <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+  </Svg>
+);
+
+export const IconListPlus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 6h11" />
+    <path d="M4 12h11" />
+    <path d="M4 18h7" />
+    <path d="M18 15v6" />
+    <path d="M15 18h6" />
+  </Svg>
+);
+
+export const IconRepo = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v16H7.5A2.5 2.5 0 0 0 5 20.5z" />
+    <path d="M5 20.5A2.5 2.5 0 0 0 7.5 23H19v-5" />
+  </Svg>
+);
+
+export const IconBoard = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M9 3v18" />
+    <path d="M15 3v12" />
+  </Svg>
+);
+
+export const IconSearch = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-3.5-3.5" />
+  </Svg>
+);

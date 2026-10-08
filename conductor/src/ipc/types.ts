@@ -195,3 +195,114 @@ export interface CommandHelp {
   raw: string;
   error: string | null;
 }
+
+// ---- Tasks sidebar ----
+
+export type TaskStatus = "backlog" | "todo" | "in_progress" | "review" | "blocked" | "done";
+/** 0 = urgent … 3 = low. */
+export type TaskPriority = 0 | 1 | 2 | 3;
+
+export interface Task {
+  id: string;
+  title: string;
+  notes: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  project: string | null;
+  /** Epoch ms (local end-of-day). */
+  dueAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  /** Backend-owned: first entry into in_progress. */
+  startedAt: number | null;
+  /** Backend-owned: set on entering done, cleared on leaving it. */
+  completedAt: number | null;
+}
+
+export interface TaskEvent {
+  fromStatus: TaskStatus | null;
+  toStatus: TaskStatus;
+  at: number;
+}
+
+// ---- GitHub issues sidebar ----
+
+export interface GhAccount {
+  login: string;
+  /** "gh" = token held by the GitHub CLI; "token" = pasted PAT in the Keychain. */
+  via: "gh" | "token";
+  scopes: string[] | null;
+  canProjects: boolean;
+}
+
+export interface GhRepoInfo {
+  fullName: string;
+  url: string;
+  private: boolean;
+  description: string | null;
+  pushedAt: number | null;
+}
+
+export interface GhProjectInfo {
+  id: string;
+  title: string;
+  number: number;
+  owner: string;
+  url: string;
+}
+
+export interface GhProjectList {
+  projects: GhProjectInfo[];
+  notices: string[];
+}
+
+export type GhSourceKind = "repo" | "project";
+
+export interface GhSourceInput {
+  kind: GhSourceKind;
+  /** "owner/name" for repos, node id for projects. */
+  key: string;
+  title: string;
+  url: string | null;
+}
+
+export interface GhSource extends GhSourceInput {
+  id: string;
+  account: string;
+  statusOptions: string[];
+  syncedAt: number | null;
+  error: string | null;
+}
+
+export interface GhLabel {
+  name: string;
+  /** Validated "#rrggbb" or null. */
+  color: string | null;
+}
+
+export interface GhItem {
+  sourceId: string;
+  itemKey: string;
+  kind: "issue" | "pr" | "draft";
+  repo: string | null;
+  number: number | null;
+  title: string;
+  state: string;
+  url: string | null;
+  author: string | null;
+  assignees: string[];
+  labels: GhLabel[];
+  comments: number;
+  updatedAt: number;
+  status: string | null;
+  fields: { name: string; value: string }[];
+  /** Plain text — render as text, never HTML. */
+  body: string;
+  /** Epoch ms (0 for items cached before this field existed). */
+  createdAt: number;
+  /** Last title/body edit, if ever edited. */
+  editedAt: number | null;
+  /** Newest comment and its author. */
+  lastCommentAt: number | null;
+  lastCommentBy: string | null;
+}

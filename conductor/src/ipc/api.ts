@@ -27,6 +27,14 @@ import {
   type SessionSnapshotWithScrollback,
   type StateEventPayload,
   type Summary,
+  type Task,
+  type TaskEvent,
+  type GhAccount,
+  type GhItem,
+  type GhProjectList,
+  type GhRepoInfo,
+  type GhSource,
+  type GhSourceInput,
 } from "./types";
 
 // ---- Commands (frontend -> Rust) ----
@@ -382,4 +390,77 @@ export function decodePtyBytes(base64Bytes: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+// ---- Tasks sidebar ----
+
+/** Open tasks plus those completed at/after `doneSince` (epoch ms). */
+export function listTasks(doneSince: number): Promise<Task[]> {
+  return invoke<Task[]>("list_tasks", { doneSince });
+}
+
+/** `id` and timestamps are assigned by the backend. */
+export function createTask(task: Task): Promise<Task> {
+  return invoke<Task>("create_task", { task });
+}
+
+/** Whole-row update; status changes are logged to the task's timeline. */
+export function updateTask(task: Task): Promise<Task> {
+  return invoke<Task>("update_task", { task });
+}
+
+export function deleteTask(id: string): Promise<void> {
+  return invoke("delete_task", { id });
+}
+
+export function taskEvents(id: string): Promise<TaskEvent[]> {
+  return invoke<TaskEvent[]>("task_events", { id });
+}
+
+// ---- GitHub issues sidebar ----
+
+export function ghAccounts(): Promise<GhAccount[]> {
+  return invoke<GhAccount[]>("gh_accounts");
+}
+
+export function ghGetAccount(): Promise<string | null> {
+  return invoke<string | null>("gh_get_account");
+}
+
+export function ghSetAccount(login: string): Promise<void> {
+  return invoke("gh_set_account", { login });
+}
+
+/** Validates the PAT and stores it in the macOS Keychain. */
+export function ghAddToken(token: string): Promise<GhAccount> {
+  return invoke<GhAccount>("gh_add_token", { token });
+}
+
+export function ghRemoveToken(login: string): Promise<void> {
+  return invoke("gh_remove_token", { login });
+}
+
+export function ghListRepos(account: string): Promise<GhRepoInfo[]> {
+  return invoke<GhRepoInfo[]>("gh_list_repos", { account });
+}
+
+export function ghListProjects(account: string): Promise<GhProjectList> {
+  return invoke<GhProjectList>("gh_list_projects", { account });
+}
+
+export function ghSources(account: string): Promise<GhSource[]> {
+  return invoke<GhSource[]>("gh_sources", { account });
+}
+
+export function ghSetSources(account: string, sources: GhSourceInput[]): Promise<GhSource[]> {
+  return invoke<GhSource[]>("gh_set_sources", { account, sources });
+}
+
+/** Re-fetch every selected source; per-source errors land on `GhSource.error`. */
+export function ghSync(account: string): Promise<GhSource[]> {
+  return invoke<GhSource[]>("gh_sync", { account });
+}
+
+export function ghItems(account: string): Promise<GhItem[]> {
+  return invoke<GhItem[]>("gh_items", { account });
 }

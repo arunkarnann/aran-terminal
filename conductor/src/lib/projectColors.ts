@@ -55,6 +55,21 @@ export function getProjectColor(name: string | null | undefined): string {
   return overrides[name] ?? defaultProjectColor(name);
 }
 
+/** Text color that stays readable on a solid `hex` fill: near-black on light colors,
+ *  white on dark ones (WCAG relative luminance). */
+export function inkOn(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return "#fff";
+  const n = parseInt(m[1], 16);
+  const lin = (c: number) => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const l = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+  // Pick whichever of black/white contrasts more with the fill.
+  return l > 0.179 ? "#14151c" : "#ffffff";
+}
+
 export function setProjectColor(name: string, color: string) {
   overrides = { ...overrides, [name]: color };
   try {

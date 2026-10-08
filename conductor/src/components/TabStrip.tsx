@@ -3,7 +3,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { AttentionState, SessionId, SessionMeta } from "../ipc/types";
 import { ageTier, formatMem, formatMinutes, memTier } from "../lib/ui";
 import { useNow } from "../lib/useNow";
-import { getProjectColor, setProjectColor, useProjectColors } from "../lib/projectColors";
+import { getProjectColor, inkOn, setProjectColor, useProjectColors } from "../lib/projectColors";
 import { tabDensity, useElementWidth } from "../lib/useTabDensity";
 import { IconAlert, IconFolderOpen, IconPlus, IconX } from "./Icons";
 
@@ -151,7 +151,11 @@ export function Tab({ session, now, isActive, vertical, onClose, onSelect, onRen
         isActive ? "tab--active" : ""
       } ${session.state === "WAITING" ? "tab--waiting" : ""}`}
       // Project color as a CSS var so the stylesheet decides where it shows.
-      style={session.project ? ({ "--tab-color": projectColor } as CSSProperties) : undefined}
+      style={
+        session.project
+          ? ({ "--tab-color": projectColor, "--tab-ink": inkOn(projectColor) } as CSSProperties)
+          : undefined
+      }
       onClick={onSelect}
       onDoubleClick={handleDoubleClick}
     >

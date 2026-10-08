@@ -13,6 +13,7 @@ pub mod commands;
 pub mod db;
 pub mod detection;
 pub mod git;
+pub mod github;
 pub mod ipc;
 pub mod notify;
 pub mod permissions;
@@ -107,6 +108,22 @@ pub fn run() {
             commands::close_session_snapshot,
             commands::reopen_session_snapshot,
             commands::delete_session_snapshot,
+            commands::list_tasks,
+            commands::create_task,
+            commands::update_task,
+            commands::delete_task,
+            commands::task_events,
+            commands::gh_accounts,
+            commands::gh_get_account,
+            commands::gh_set_account,
+            commands::gh_add_token,
+            commands::gh_remove_token,
+            commands::gh_list_repos,
+            commands::gh_list_projects,
+            commands::gh_sources,
+            commands::gh_set_sources,
+            commands::gh_sync,
+            commands::gh_items,
             commands::git_repos,
             commands::git_status,
             commands::git_log,

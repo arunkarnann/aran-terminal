@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
 
-use crate::ipc::{AttentionState, FocusBlock, FocusDay, HistoryEntry, ProjectTime, StateSource, Summary};
+use crate::ipc::{
+    AttentionState, FocusBlock, FocusDay, GhItem, GhSource, GhSourceInput, HistoryEntry,
+    ProjectTime, StateSource, Summary, Task, TaskEvent,
+};
 
 pub struct DbState(pub Arc<Mutex<Connection>>);
 
@@ -31,6 +34,10 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(include_str!("../migrations/0002_focus.sql"))?;
     // Session restore — snapshot table for tab layout + scrollback persistence.
     conn.execute_batch(include_str!("../migrations/0003_session_snapshot.sql"))?;
+    // Tasks sidebar — to-do items + their status timeline.
+    conn.execute_batch(include_str!("../migrations/0004_tasks.sql"))?;
+    // GitHub issues sidebar — selected repos/projects + cached items.
+    conn.execute_batch(include_str!("../migrations/0005_github.sql"))?;
     // Seeded suggestions learned from the user's existing shell history (auto-learn).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS hist_seed (cmdline TEXT PRIMARY KEY, freq INTEGER NOT NULL DEFAULT 1);",
@@ -691,6 +698,247 @@ pub fn daily_summary(conn: &Connection, since: i64, until: i64, cap_overrides: i
     }
 }
 
+// ---- Tasks sidebar ----
+
+const TASK_COLS: &str = "id, title, notes, status, priority, project, due_at, created_at, \
+     updated_at, started_at, completed_at";
+
+fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
+    Ok(Task {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        notes: r.get(2)?,
+        status: r.get(3)?,
+        priority: r.get(4)?,
+        project: r.get(5)?,
+        due_at: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+        started_at: r.get(9)?,
+        completed_at: r.get(10)?,
+    })
+}
+
+/// Every task. Done tasks completed before `done_since` are left out so the list stays
+/// short; pass 0 to get everything.
+pub fn list_tasks(conn: &Connection, done_since: i64) -> rusqlite::Result<Vec<Task>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {TASK_COLS} FROM task \
+         WHERE status != 'done' OR completed_at >= ?1 \
+         ORDER BY priority ASC, created_at DESC"
+    ))?;
+    let rows = stmt.query_map(params![done_since], row_to_task)?;
+    rows.collect()
+}
+
+pub fn get_task(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> {
+    match conn.query_row(
+        &format!("SELECT {TASK_COLS} FROM task WHERE id = ?1"),
+        params![id],
+        row_to_task,
+    ) {
+        Ok(t) => Ok(Some(t)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn insert_task_event(
+    conn: &Connection,
+    task_id: &str,
+    from: Option<&str>,
+    to: &str,
+    at: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO task_event (task_id, from_status, to_status, at) VALUES (?1, ?2, ?3, ?4)",
+        params![task_id, from, to, at],
+    )?;
+    Ok(())
+}
+
+/// Insert a new task and its "created" timeline entry. Lifecycle stamps follow the
+/// initial status (a task can be created straight into in_progress).
+pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> rusqlite::Result<Task> {
+    let started_at = (t.status == "in_progress").then_some(now);
+    let completed_at = (t.status == "done").then_some(now);
+    conn.execute(
+        "INSERT INTO task (id, title, notes, status, priority, project, due_at, created_at, \
+         updated_at, started_at, completed_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10)",
+        params![
+            t.id, t.title, t.notes, t.status, t.priority, t.project, t.due_at, now, started_at,
+            completed_at
+        ],
+    )?;
+    insert_task_event(conn, &t.id, None, &t.status, now)?;
+    get_task(conn, &t.id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+/// Whole-row update of the user-editable fields. The backend owns the lifecycle: on a
+/// status change it logs a timeline event, stamps `started_at` on the first entry into
+/// in_progress, and sets/clears `completed_at` when entering/leaving done.
+pub fn update_task(conn: &Connection, t: &Task, now: i64) -> rusqlite::Result<Option<Task>> {
+    let Some(old) = get_task(conn, &t.id)? else {
+        return Ok(None);
+    };
+    let mut started_at = old.started_at;
+    let mut completed_at = old.completed_at;
+    if old.status != t.status {
+        insert_task_event(conn, &t.id, Some(&old.status), &t.status, now)?;
+        if t.status == "in_progress" && started_at.is_none() {
+            started_at = Some(now);
+        }
+        completed_at = (t.status == "done").then_some(now);
+    }
+    conn.execute(
+        "UPDATE task SET title = ?2, notes = ?3, status = ?4, priority = ?5, project = ?6, \
+         due_at = ?7, updated_at = ?8, started_at = ?9, completed_at = ?10 WHERE id = ?1",
+        params![
+            t.id, t.title, t.notes, t.status, t.priority, t.project, t.due_at, now, started_at,
+            completed_at
+        ],
+    )?;
+    get_task(conn, &t.id)
+}
+
+pub fn delete_task(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    // foreign_keys is off, so cascade by hand.
+    conn.execute("DELETE FROM task_event WHERE task_id = ?1", params![id])?;
+    conn.execute("DELETE FROM task WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn task_events(conn: &Connection, id: &str) -> rusqlite::Result<Vec<TaskEvent>> {
+    let mut stmt = conn.prepare(
+        "SELECT from_status, to_status, at FROM task_event WHERE task_id = ?1 ORDER BY at, id",
+    )?;
+    let rows = stmt.query_map(params![id], |r| {
+        Ok(TaskEvent {
+            from_status: r.get(0)?,
+            to_status: r.get(1)?,
+            at: r.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+// ---- GitHub issues sidebar ----
+
+pub fn gh_source_id(account: &str, kind: &str, key: &str) -> String {
+    format!("{account}|{kind}|{key}")
+}
+
+const GH_SOURCE_COLS: &str = "id, account, kind, key, title, url, status_options, synced_at, error";
+
+fn row_to_gh_source(r: &rusqlite::Row) -> rusqlite::Result<GhSource> {
+    let opts: String = r.get(6)?;
+    Ok(GhSource {
+        id: r.get(0)?,
+        account: r.get(1)?,
+        kind: r.get(2)?,
+        key: r.get(3)?,
+        title: r.get(4)?,
+        url: r.get(5)?,
+        status_options: serde_json::from_str(&opts).unwrap_or_default(),
+        synced_at: r.get(7)?,
+        error: r.get(8)?,
+    })
+}
+
+pub fn gh_sources(conn: &Connection, account: &str) -> rusqlite::Result<Vec<GhSource>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {GH_SOURCE_COLS} FROM gh_source WHERE account = ?1 ORDER BY kind DESC, title COLLATE NOCASE"
+    ))?;
+    let rows = stmt.query_map(params![account], row_to_gh_source)?;
+    rows.collect()
+}
+
+/// Replace an account's selection. Kept sources keep their cache and sync state;
+/// dropped ones lose their cached items too (foreign_keys is off, so by hand).
+pub fn gh_set_sources(
+    conn: &mut Connection,
+    account: &str,
+    sources: &[GhSourceInput],
+    now: i64,
+) -> rusqlite::Result<Vec<GhSource>> {
+    let tx = conn.transaction()?;
+    let keep: Vec<String> = sources
+        .iter()
+        .map(|s| gh_source_id(account, &s.kind, &s.key))
+        .collect();
+    let existing: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM gh_source WHERE account = ?1")?;
+        let rows = stmt.query_map(params![account], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for id in existing.iter().filter(|id| !keep.contains(id)) {
+        tx.execute("DELETE FROM gh_item WHERE source_id = ?1", params![id])?;
+        tx.execute("DELETE FROM gh_source WHERE id = ?1", params![id])?;
+    }
+    for (s, id) in sources.iter().zip(&keep) {
+        tx.execute(
+            "INSERT INTO gh_source (id, account, kind, key, title, url, added_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(id) DO UPDATE SET title = excluded.title, url = excluded.url",
+            params![id, account, s.kind, s.key, s.title, s.url, now],
+        )?;
+    }
+    tx.commit()?;
+    gh_sources(conn, account)
+}
+
+/// Swap a source's cached items for a fresh fetch, atomically.
+pub fn gh_replace_items(
+    conn: &mut Connection,
+    source_id: &str,
+    items: &[GhItem],
+    status_options: &[String],
+    now: i64,
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM gh_item WHERE source_id = ?1", params![source_id])?;
+    {
+        let mut ins = tx.prepare(
+            "INSERT OR REPLACE INTO gh_item (source_id, item_key, data, updated_at) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for it in items {
+            let data = serde_json::to_string(it).unwrap_or_default();
+            ins.execute(params![source_id, it.item_key, data, it.updated_at])?;
+        }
+    }
+    let opts = serde_json::to_string(status_options).unwrap_or_else(|_| "[]".into());
+    tx.execute(
+        "UPDATE gh_source SET status_options = ?2, synced_at = ?3, error = NULL WHERE id = ?1",
+        params![source_id, opts, now],
+    )?;
+    tx.commit()
+}
+
+pub fn gh_set_source_error(conn: &Connection, source_id: &str, error: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE gh_source SET error = ?2 WHERE id = ?1",
+        params![source_id, error],
+    )?;
+    Ok(())
+}
+
+/// Every cached item of an account's sources, most recently updated first.
+pub fn gh_items(conn: &Connection, account: &str) -> rusqlite::Result<Vec<GhItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT i.data FROM gh_item i JOIN gh_source s ON s.id = i.source_id \
+         WHERE s.account = ?1 ORDER BY i.updated_at DESC",
+    )?;
+    let rows = stmt.query_map(params![account], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for data in rows {
+        if let Ok(item) = serde_json::from_str::<GhItem>(&data?) {
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,6 +964,133 @@ mod tests {
         assert_eq!(s.per_project.len(), 1);
         assert_eq!(s.per_project[0].project, "proj");
         assert_eq!(count_sessions_named(&c, "agent"), 1);
+    }
+
+    fn new_task(id: &str, status: &str) -> Task {
+        Task {
+            id: id.into(),
+            title: "Ship tasks".into(),
+            notes: String::new(),
+            status: status.into(),
+            priority: 1,
+            project: Some("proj".into()),
+            due_at: None,
+            created_at: 0,
+            updated_at: 0,
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn task_lifecycle_and_timeline() {
+        let db = DbState::memory().unwrap();
+        let c = db.0.lock().unwrap();
+
+        let t = insert_task(&c, &new_task("t1", "todo"), 1_000).unwrap();
+        assert_eq!(t.started_at, None);
+
+        let mut t = t;
+        t.status = "in_progress".into();
+        let t = update_task(&c, &t, 2_000).unwrap().unwrap();
+        assert_eq!(t.started_at, Some(2_000));
+
+        let mut t = t;
+        t.status = "done".into();
+        let t = update_task(&c, &t, 3_000).unwrap().unwrap();
+        assert_eq!(t.completed_at, Some(3_000));
+        assert_eq!(t.started_at, Some(2_000));
+
+        // Reopen: completed_at clears, started_at keeps the first start.
+        let mut t = t;
+        t.status = "in_progress".into();
+        let t = update_task(&c, &t, 4_000).unwrap().unwrap();
+        assert_eq!(t.completed_at, None);
+        assert_eq!(t.started_at, Some(2_000));
+
+        // Non-status edits don't add timeline rows.
+        let mut t = t;
+        t.title = "Renamed".into();
+        update_task(&c, &t, 5_000).unwrap();
+
+        let ev = task_events(&c, "t1").unwrap();
+        let steps: Vec<_> = ev.iter().map(|e| (e.from_status.as_deref(), e.to_status.as_str(), e.at)).collect();
+        assert_eq!(
+            steps,
+            vec![
+                (None, "todo", 1_000),
+                (Some("todo"), "in_progress", 2_000),
+                (Some("in_progress"), "done", 3_000),
+                (Some("done"), "in_progress", 4_000),
+            ]
+        );
+
+        // Old done tasks drop out of the list; deletes cascade to events.
+        insert_task(&c, &new_task("t2", "done"), 100).unwrap();
+        assert_eq!(list_tasks(&c, 1_000).unwrap().len(), 1);
+        assert_eq!(list_tasks(&c, 0).unwrap().len(), 2);
+        delete_task(&c, "t1").unwrap();
+        assert!(get_task(&c, "t1").unwrap().is_none());
+        assert!(task_events(&c, "t1").unwrap().is_empty());
+    }
+
+    fn gh_item(source: &str, key: &str, at: i64) -> GhItem {
+        GhItem {
+            source_id: source.into(),
+            item_key: key.into(),
+            kind: "issue".into(),
+            repo: Some("o/r".into()),
+            number: Some(1),
+            title: "t".into(),
+            state: "open".into(),
+            url: None,
+            author: None,
+            assignees: vec![],
+            labels: vec![],
+            comments: 0,
+            updated_at: at,
+            status: None,
+            fields: vec![],
+            body: String::new(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gh_sources_and_item_replacement() {
+        let db = DbState::memory().unwrap();
+        let mut c = db.0.lock().unwrap();
+        let src = |kind: &str, key: &str| GhSourceInput {
+            kind: kind.into(),
+            key: key.into(),
+            title: key.into(),
+            url: None,
+        };
+        let s = gh_set_sources(&mut c, "alice", &[src("repo", "o/r"), src("project", "P1")], 1).unwrap();
+        assert_eq!(s.len(), 2);
+        let repo_id = gh_source_id("alice", "repo", "o/r");
+        let proj_id = gh_source_id("alice", "project", "P1");
+
+        gh_replace_items(&mut c, &repo_id, &[gh_item(&repo_id, "o/r#1", 10), gh_item(&repo_id, "o/r#2", 20)], &[], 5).unwrap();
+        gh_replace_items(&mut c, &proj_id, &[gh_item(&proj_id, "o/r#1", 30)], &["Todo".into()], 5).unwrap();
+        assert_eq!(gh_items(&c, "alice").unwrap().len(), 3);
+        assert_eq!(gh_items(&c, "bob").unwrap().len(), 0, "scoped per account");
+
+        // A re-sync replaces, not appends.
+        gh_replace_items(&mut c, &repo_id, &[gh_item(&repo_id, "o/r#2", 40)], &[], 6).unwrap();
+        let items = gh_items(&c, "alice").unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].updated_at, 40, "newest first");
+
+        let p = gh_sources(&c, "alice").unwrap().into_iter().find(|s| s.id == proj_id).unwrap();
+        assert_eq!(p.status_options, vec!["Todo".to_string()]);
+        assert_eq!(p.synced_at, Some(5));
+
+        // Dropping a source drops its cache; kept sources keep theirs.
+        gh_set_sources(&mut c, "alice", &[src("project", "P1")], 2).unwrap();
+        let items = gh_items(&c, "alice").unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_id, proj_id);
     }
 
     #[test]

@@ -4,7 +4,6 @@ import type { UiSession } from "../stores/useSessionManager";
 import { SessionCard } from "./SessionCard";
 import { DashboardFooter } from "./DashboardFooter";
 import { formatDuration } from "../lib/ui";
-import { useResizable } from "../lib/useResizable";
 
 type Filter = "ALL" | AttentionState;
 
@@ -35,7 +34,6 @@ export function Dashboard({
 }: DashboardProps) {
   const [filter, setFilter] = useState<Filter>("ALL");
   const [now, setNow] = useState(() => Date.now());
-  const [dashWidth, handleProps] = useResizable("right", "conductor-dashboard-width", 320, 240, 500);
 
   // Tick once a second so the wait clock and uptimes stay live.
   useEffect(() => {
@@ -66,8 +64,7 @@ export function Dashboard({
     waiting.length > 0 ? now - (waiting[0].waitingSince ?? now) : 0;
 
   return (
-    <aside className="dashboard" style={{ width: dashWidth }}>
-      <div className="resize-handle" {...handleProps} />
+    <div className="dashboard">
       <Ribbon
         waiting={waiting.length}
         running={running}
@@ -147,7 +144,7 @@ export function Dashboard({
       </div>
 
       <DashboardFooter onOpenToday={onOpenToday} />
-    </aside>
+    </div>
   );
 }
 

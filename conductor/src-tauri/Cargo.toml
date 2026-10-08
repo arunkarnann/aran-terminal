@@ -1,6 +1,6 @@
 [package]
 name = "conductor"
-version = "2.8.0"
+version = "2.9.0"
 description = "Aran Terminal — a terminal with a focus dashboard for managing AI coding-agent sessions"
 authors = ["Arun"]
 edition = "2021"
@@ -32,4 +32,7 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 # Phase 2 — persistence
 rusqlite = { version = "0.32", features = ["bundled"] }
+# GitHub issues sidebar — in-process HTTPS (token never in argv) + Keychain for pasted PATs
+ureq = { version = "2", features = ["json"] }
+keyring = { version = "3", features = ["apple-native"] }
 
