@@ -37,7 +37,7 @@ enum Pane {
 }
 
 /// Issues + Git panes are still being built; flip on when they're done.
-const NEW_PANES: bool = false;
+const NEW_PANES: bool = true;
 
 impl Pane {
     const ALL: [Pane; 5] = [Pane::Dashboard, Pane::Tasks, Pane::Issues, Pane::Git, Pane::History];

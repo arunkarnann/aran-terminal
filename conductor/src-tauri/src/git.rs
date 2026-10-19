@@ -114,6 +114,8 @@ fn run(cwd: &str, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(cwd)
         .args(args)
+        // Read-only polling must never take index.lock from the user's own git.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
     if !out.status.success() {

@@ -18,14 +18,14 @@ Since **v3.0.0** the UI is egui + `alacritty_terminal`: a ~6 MB universal downlo
 
 <br />
 
-### [⬇️ Download for macOS (Apple Silicon + Intel) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.1_universal.dmg)
+### [⬇️ Download for macOS (Apple Silicon + Intel) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.2_universal.dmg)
 
-[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Universal)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.1_universal.dmg)
+[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Universal)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.2_universal.dmg)
 
 <sub>~6 MB · not notarized — on first launch allow it in **System Settings → Privacy & Security → Open Anyway**
 (or `xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"`) · maintainers: see [SIGNING.md](conductor/SIGNING.md)</sub>
 
-### [⬇️ Download for Linux (x86_64) — .tar.gz](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.1_linux_x86_64.tar.gz)
+### [⬇️ Download for Linux (x86_64) — .tar.gz](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.2_linux_x86_64.tar.gz)
 
 <sub>Extract and run `./aran`. The v2 Tauri builds (.deb / .rpm / .AppImage) remain on the
 [v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).</sub>
@@ -69,6 +69,9 @@ notifies you when a session goes quiet or asks a question.
   (→ accept, ↓ list, Esc hide). Never shows inside Claude Code or other full-screen apps.
 - **Mouse reporting** — wheel and clicks go to TUI apps that ask for them (Claude Code,
   vim, htop), so scrolling scrolls the app instead of walking its prompt history.
+- **Issues** pane (⌘I) — a GUI for the project's local [Beads](https://github.com/steveyegge/beads)
+  (`bd`) tracker: issues by status, priorities, create / update / close / reopen, details + deps.
+- **Git** pane (⌘⇧G) — status, stage/unstage, diffs, commit, branches, fetch/pull/push, stashes.
 - **Command history** pane (⌘Y) — search everything you ran, click to type it again.
 - **Over-the-air updates** (from v3.0.1) — the app checks GitHub Releases and updates itself.
 - **Themes** — Dracula, Tokyo Night Storm, GitHub Light, Catppuccin Mocha, GitHub Dark,
@@ -76,7 +79,7 @@ notifies you when a session goes quiet or asks a question.
 - **Local-first persistence** — SQLite (WAL mode) via `rusqlite`.
 
 **v2 only (Tauri build, not yet ported to v3):** Warp-style command blocks, focus timer,
-Git panel, GitHub Issues sidebar and session restore with scrollback. Get them from the
+GitHub Issues sidebar and session restore with scrollback. Get them from the
 [v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).
 
 ## Stack

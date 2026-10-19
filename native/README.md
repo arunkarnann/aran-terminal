@@ -30,7 +30,7 @@ Data lives in `~/Library/Application Support/studio.gearup.conductor/native.db`
 
 ⌘T new tab · ⌘W close · ⌘1–9 switch · ⌘⇧[ ⌘⇧] prev/next · ⌘B dashboard · ⌘J tasks ·
 ⌘Y history · ⌘+ / ⌘− / ⌘0 font size · ⌘K clear scrollback ·
-⌘C / ⌘V copy/paste · double-click tab to rename · Shift/Option+Enter = newline (Claude Code)
+⌘I issues · ⌘⇧G git · ⌘C / ⌘V copy/paste · double-click tab to rename · Shift/Option+Enter = newline (Claude Code)
 
 Command suggestions (at the shell prompt): grey ghost text from your history —
 → accept · ↓ open the list · ↑↓ choose · Tab/Enter accept from the list · Esc hide.
@@ -40,16 +40,12 @@ mouse mode.
 ## Ported so far
 
 Two-row tab groups per project folder (custom colours, reveal in Finder), Tasks sidebar,
-command **History**, over-the-air updates (v3.0.1+), command autocomplete at the prompt, mouse reporting to TUI apps (wheel/clicks
+**Issues** sidebar for the project's local Beads (`bd`) tracker, **Git** panel, command
+**History**, over-the-air updates (v3.0.1+), command autocomplete at the prompt, mouse reporting to TUI apps (wheel/clicks
 go to Claude Code, vim, htop …), all 8 themes, session cap + override dialog, live
 RUNNING/IDLE/WAITING detection, "Needs you" list, sessions grouped by project with
 uptime/commands/memory, today's stats, WAITING + long-command notifications,
 wait-threshold and cap settings.
-
-## In progress
-
-Issues sidebar for the project's local Beads (`bd`) tracker, Git panel (built behind
-`NEW_PANES` in `app.rs`).
 
 ## Not ported yet
 
