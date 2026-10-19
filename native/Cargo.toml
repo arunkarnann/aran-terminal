@@ -1,0 +1,31 @@
+[package]
+name = "aran-native"
+version = "3.0.0"
+edition = "2021"
+description = "Aran Terminal — pure-Rust native build (no webview, no JS)"
+
+[[bin]]
+name = "aran"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "clipboard"] }
+alacritty_terminal = "0.26"
+portable-pty = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+
+# Linux needs a windowing backend; macOS uses AppKit directly.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "clipboard", "x11", "wayland"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = "s"

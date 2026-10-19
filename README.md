@@ -5,34 +5,33 @@
 **A lightweight, Rust-built terminal manager with a focus dashboard for running many AI
 coding agents at once.**
 
-Aran Terminal is a fast, native desktop app — built on a **Rust** backend — that wraps a
-genuine PTY-backed terminal and *watches* each session to tell you which one actually needs
-you, so a wall of agent terminals stops being a wall of noise. It's deliberately lightweight:
-a Rust core and a small WebView UI, shipping as a ~4 MB DMG on macOS.
+Aran Terminal is a fast, native desktop app written **entirely in Rust** — no webview, no
+JavaScript — that wraps a genuine PTY-backed terminal and *watches* each session to tell you
+which one actually needs you, so a wall of agent terminals stops being a wall of noise.
+Since **v3.0.0** the UI is egui + `alacritty_terminal`: a ~6 MB universal download, ~0% CPU at idle.
 
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-000000?style=flat-square)
-![built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?style=flat-square)
-![frontend](https://img.shields.io/badge/frontend-React%20%2B%20TypeScript-0A7EA4?style=flat-square)
-![backend](https://img.shields.io/badge/backend-Rust-CE412B?style=flat-square)
+![pure rust](https://img.shields.io/badge/100%25-Rust-CE412B?style=flat-square)
+![ui](https://img.shields.io/badge/UI-egui-24C8DB?style=flat-square)
+![terminal](https://img.shields.io/badge/terminal-alacritty__terminal-F46623?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-success?style=flat-square)
 
 <br />
 
-### [⬇️ Download for macOS (Apple Silicon) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg)
+### [⬇️ Download for macOS (Apple Silicon + Intel) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.0_universal.dmg)
 
-[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Apple%20Silicon)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg)
+[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Universal)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.0_universal.dmg)
 
-<sub>~4 MB · macOS on Apple Silicon · not yet notarized — on first launch **right-click the app → Open** · maintainers: see [SIGNING.md](conductor/SIGNING.md) for how builds are signed so macOS permission grants persist</sub>
+<sub>~6 MB · not notarized — on first launch allow it in **System Settings → Privacy & Security → Open Anyway**
+(or `xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"`) · maintainers: see [SIGNING.md](conductor/SIGNING.md)</sub>
 
-### [⬇️ Download for Linux](https://github.com/arunkarnann/aran-terminal/releases/latest)
+### [⬇️ Download for Linux (x86_64) — .tar.gz](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.0_linux_x86_64.tar.gz)
 
-[![Download .deb](https://img.shields.io/badge/Download-.deb%20(Debian%2FUbuntu)-E95420?style=for-the-badge&logo=debian&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.deb)
-[![Download .AppImage](https://img.shields.io/badge/Download-.AppImage%20(Any%20distro)-50fa7b?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.AppImage)
-[![Download .rpm](https://img.shields.io/badge/Download-.rpm%20(Fedora)-51A2DA?style=for-the-badge&logo=fedora&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal-2.3.1-1.x86_64.rpm)
+<sub>Extract and run `./aran`. The v2 Tauri builds (.deb / .rpm / .AppImage) remain on the
+[v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).</sub>
 
-<sub>Debian/Ubuntu: `sudo dpkg -i Aran.Terminal_*.deb && sudo apt-get install -f`
- · Fedora: `sudo rpm -i Aran.Terminal-*.rpm`
- · Any distro: `chmod +x *.AppImage && ./Aran.Terminal_*.AppImage`</sub>
+> **Upgrading from v2.x:** v2 apps don't auto-update to v3 — download v3 once. The native
+> app keeps its data in `native.db` next to the v2 database. Source: [`native/`](native/).
 
 [Landing page](https://arunkarnann.github.io/aran-terminal/) · [All releases](https://github.com/arunkarnann/aran-terminal/releases)
 
@@ -50,32 +49,29 @@ notifies you when a session goes quiet or asks a question.
 
 ## Features
 
-- **Real terminal** — xterm.js with the WebGL renderer over a `portable-pty` backend (the
-  WezTerm PTY library). Full shell, not an emulated subset.
+**v3 (native, pure Rust)**
+
+- **Real terminal** — `alacritty_terminal` grid painted by egui over a `portable-pty` backend.
+  Truecolor, 256 colours, Nerd Font glyphs, scrollback, selection, bracketed paste.
 - **Attention detection engine** — a pure Rust module over the byte stream combining
   **OSC 133** shell-integration markers with an activity heuristic and a state machine to
   decide RUNNING / IDLE / WAITING. This is the core idea.
-- **Focus dashboard** — a "needs you" zone that floats the WAITING sessions to the top so you
-  never hunt for the blocked one.
-- **Multi-session tabs** — open, close, rename, and group sessions, with a configurable
-  max-session cap.
-- **Command blocks** — Warp-style per-command blocks with a status gutter, sticky command
-  header, and a hover toolbar (re-run, copy, etc.).
+- **Focus dashboard** — a "needs you" zone that floats WAITING sessions to the top, sessions
+  per project with uptime / commands / memory, and today's stats.
+- **Tab groups** — one group per project folder, with custom colours, reveal in Finder,
+  rename, and a configurable max-session cap.
+- **Tasks** — a to-do list with a Backlog → To do → In progress → Review → Done workflow,
+  priorities, due dates, notes and a timeline.
 - **Shell integration** — auto-generated, non-destructive zsh/bash hooks that source your real
   config and add OSC 133 markers (never replaces your dotfiles).
-- **Command history autofill** — inline ghost suggestions drawn from your real command history.
-- **Focus timer** — a built-in Pomodoro-style focus/break loop with progress rings, a daily
-  goal, and break prompts.
-- **Git panel** — at-a-glance repo status for the active session.
-- **Daily summary** — uptime, command counts, and session activity rolled up per day.
-- **Native notifications** — macOS Notification Center alerts when a session finishes a long
-  command or starts waiting on you.
-- **Themes** — Dracula, Catppuccin Mocha, Tokyo Night Storm, Nord, One Dark, Material
-  Palenight, and GitHub Dark/Light.
-- **Sharp, tech-forward UI** — fully squared, terminal-native aesthetic driven by a single
-  design token.
-- **Local-first persistence** — SQLite (WAL mode) via `rusqlite`. Your data stays on your
-  machine.
+- **Native notifications** — when a session finishes a long command or starts waiting on you.
+- **Themes** — Dracula, Tokyo Night Storm, GitHub Light.
+- **Local-first persistence** — SQLite (WAL mode) via `rusqlite`.
+
+**v2 only (Tauri build, not yet ported to v3):** Warp-style command blocks, command history
+autofill, focus timer, Git panel, GitHub Issues sidebar, session restore with scrollback,
+the in-app auto-updater and the extra themes. Get them from the
+[v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).
 
 ## Stack
 

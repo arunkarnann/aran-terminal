@@ -1,78 +1,47 @@
 name: Release
 
-# Build signed macOS + Linux bundles, publish a GitHub Release, and generate the
-# `latest.json` manifest the in-app updater polls. Triggered by pushing a version
-# tag, e.g.  git tag v2.3.1 && git push origin v2.3.1
+# v3+: builds the pure-Rust native app (native/), not the Tauri app.
+# Triggered by pushing a version tag, e.g.  git tag v3.0.1 && git push origin v3.0.1
 #
-# tauri-action creates the release on the first matrix job to finish and appends
-# each platform's assets to it, merging every platform into one latest.json.
+# Old Tauri installs (v2.x) poll releases/latest/download/latest.json for updates.
+# This workflow publishes no latest.json, so they simply see no update; users move
+# to v3 by downloading the .dmg once.
 on:
   push:
     tags:
       - "v*"
 
+permissions:
+  contents: write # create the GitHub Release and upload assets
+
 jobs:
-  release:
-    permissions:
-      contents: write # tauri-action creates the GitHub Release
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Universal macOS binary so both Apple Silicon and Intel Macs get updates.
-          - platform: macos-latest
-            args: --target universal-apple-darwin
-            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-          # Linux x86_64 — produces .deb, .rpm and an updatable .AppImage.
-          # Built on 22.04 for the widest glibc compatibility of the AppImage.
-          - platform: ubuntu-22.04
-            args: ""
-            rust-targets: ""
-    runs-on: ${{ matrix.platform }}
+  macos:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-targets }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      # Tauri v2 Linux system dependencies (webkit2gtk 4.1, AppImage tooling, etc.).
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            build-essential \
-            curl wget file libssl-dev libxdo-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
 
-      - name: Install frontend deps
-        working-directory: conductor
-        run: npm ci
-
-      # Import the signing cert into a keychain ourselves and mark it TRUSTED.
-      # Tauri's built-in import (via APPLE_CERTIFICATE) puts a self-signed cert
-      # into an untrusted temp keychain, where `security find-identity -v`
-      # reports it invalid — codesign then fails with "failed to resolve
-      # signing identity". Trusting the cert makes the identity valid, so we
-      # only hand APPLE_SIGNING_IDENTITY to tauri-action below.
+      # Import the signing cert into a keychain and mark it trusted, so codesign can
+      # resolve the identity (see conductor/SIGNING.md). Skipped when no cert is set;
+      # the app is then ad-hoc signed.
       - name: Import macOS signing certificate
-        if: matrix.platform == 'macos-latest'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "No signing certificate configured; building ad-hoc signed."
+            exit 0
+          fi
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
@@ -86,7 +55,6 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
-          # Trust the self-signed cert so it resolves as a valid identity.
           security find-certificate -a -p "$KEYCHAIN_PATH" > "$RUNNER_TEMP/cert.pem"
           sudo security add-trusted-cert -d -r trustRoot \
             -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
@@ -94,32 +62,65 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
-      - name: Build, release, and emit latest.json
-        uses: tauri-apps/tauri-action@v0
+      - name: Build universal .app, .dmg and .zip
+        working-directory: native
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Tauri updater signing key (NOT Apple notarization). Add these under
-          # repo Settings → Secrets and variables → Actions.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS codesigning identity (optional — see conductor/SIGNING.md).
-          # A STABLE signature is what makes macOS remember permission grants
-          # (Full Disk Access, folder access) across app updates; unsigned/ad-hoc
-          # builds reset all TCC grants on every release (issue #3).
-          # The cert itself is imported and trusted by the step above — do NOT
-          # also pass APPLE_CERTIFICATE here, or Tauri re-imports it into its
-          # own untrusted temp keychain and codesign fails to resolve the
-          # identity. Works with a free self-signed cert today; swap in a
-          # Developer ID cert later (then also add APPLE_ID / APPLE_PASSWORD /
-          # APPLE_TEAM_ID for notarization).
+          UNIVERSAL: "1"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: ./scripts/bundle-macos.sh
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          projectPath: conductor
-          tagName: ${{ github.ref_name }}
-          releaseName: "Aran Terminal ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and install."
-          # Publish immediately — a draft release won't resolve at
-          # releases/latest/download/latest.json (the updater would 404).
-          releaseDraft: false
-          prerelease: false
-          args: ${{ matrix.args }}
+          name: "Aran Terminal ${{ github.ref_name }}"
+          body: |
+            Aran Terminal is now pure Rust: no webview, no JavaScript.
+            macOS: download the .dmg and drag to Applications. It isn't notarized, so on first
+            launch allow it in System Settings → Privacy & Security → "Open Anyway"
+            (or run `xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"`).
+            Linux: extract the .tar.gz and run `./aran`.
+          files: |
+            native/target/bundle/*.dmg
+            native/target/bundle/*.zip
+
+  linux:
+    # After macOS, so only one job creates the release (no already_exists race).
+    needs: macos
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev \
+            libxcursor-dev libxrandr-dev libxi-dev
+
+      - name: Build
+        working-directory: native
+        run: cargo build --release
+
+      - name: Package
+        working-directory: native
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          NAME="Aran-Terminal_${VERSION}_linux_x86_64"
+          mkdir -p "dist/$NAME"
+          cp target/release/aran README.md "dist/$NAME/"
+          cp ../conductor/src-tauri/icons/128x128.png "dist/$NAME/aran.png"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Aran Terminal ${{ github.ref_name }}"
+          files: native/dist/*.tar.gz
