@@ -1,6 +1,6 @@
 [package]
 name = "aran-native"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2021"
 description = "Aran Terminal — pure-Rust native build (no webview, no JS)"
 

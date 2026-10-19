@@ -11,6 +11,9 @@ use eframe::egui::{self, Color32, CornerRadius, Frame, Key, Margin, Modifiers, R
 use crate::db;
 use crate::ipc::{AttentionState, SessionId, Summary};
 use crate::session::{self, lock, Core, CreateError, GridSize};
+use crate::beads::IssuesPanel;
+use crate::git_panel::GitPanel;
+use crate::history::HistoryPanel;
 use crate::tasks::TaskPanel;
 use crate::term_view::{self, CellMetrics, TermViewState};
 use crate::theme;
@@ -21,11 +24,52 @@ const KEY_SIDE: &str = "native.sidebar.side";
 const KEY_TAB: &str = "native.sidebar.tab";
 const KEY_OPEN: &str = "native.sidebar.open";
 const KEY_COLORS: &str = "native.project_colors";
+const KEY_SUGGEST: &str = "native.suggestions";
+const KEY_UPDATE_AUTO: &str = "native.update.auto";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
     Dashboard,
     Tasks,
+    Issues,
+    Git,
+    History,
+}
+
+/// Issues + Git panes are still being built; flip on when they're done.
+const NEW_PANES: bool = false;
+
+impl Pane {
+    const ALL: [Pane; 5] = [Pane::Dashboard, Pane::Tasks, Pane::Issues, Pane::Git, Pane::History];
+
+    fn enabled(self) -> bool {
+        NEW_PANES || !matches!(self, Pane::Issues | Pane::Git)
+    }
+
+    /// Stored in settings, so keep these stable.
+    fn id(self) -> &'static str {
+        match self {
+            Pane::Dashboard => "dashboard",
+            Pane::Tasks => "tasks",
+            Pane::Issues => "issues",
+            Pane::Git => "git",
+            Pane::History => "history",
+        }
+    }
+
+    fn from_id(s: &str) -> Pane {
+        Pane::ALL.into_iter().find(|p| p.id() == s && p.enabled()).unwrap_or(Pane::Dashboard)
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Pane::Dashboard => "Dashboard",
+            Pane::Tasks => "Tasks",
+            Pane::Issues => "Issues",
+            Pane::Git => "Git",
+            Pane::History => "History",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -61,6 +105,9 @@ pub struct AranApp {
     side: Side,
     pane: Pane,
     tasks: TaskPanel,
+    issues: IssuesPanel,
+    git: GitPanel,
+    history: HistoryPanel,
     /// Last active tab per group, so clicking a group returns you to where you were.
     last_in_group: HashMap<String, SessionId>,
     confirm_close_group: Option<(String, Vec<SessionId>)>,
@@ -68,6 +115,13 @@ pub struct AranApp {
     renaming: Option<(SessionId, String)>,
     summary: Option<(Instant, Summary)>,
     app_rss_kb: Arc<AtomicI64>,
+    /// Hand keyboard focus back to the terminal next frame.
+    focus_terminal: bool,
+    /// Command autocomplete at the prompt (Settings).
+    suggestions_on: bool,
+    updater: crate::updater::Updater,
+    update_auto: bool,
+    confirm_update: Option<crate::updater::Release>,
     error: Option<String>,
 }
 
@@ -81,10 +135,7 @@ impl AranApp {
                 Some("left") => Side::Left,
                 _ => Side::Right,
             };
-            let pane = match db::get_setting(&conn, KEY_TAB).as_deref() {
-                Some("tasks") => Pane::Tasks,
-                _ => Pane::Dashboard,
-            };
+            let pane = Pane::from_id(db::get_setting(&conn, KEY_TAB).as_deref().unwrap_or(""));
             let open = db::get_setting(&conn, KEY_OPEN).as_deref() != Some("0");
             (th, side, pane, open)
         };
@@ -104,6 +155,9 @@ impl AranApp {
             });
         }
         let tasks = TaskPanel::new(core.db.clone());
+        let issues = IssuesPanel::new(cc.egui_ctx.clone());
+        let git = GitPanel::new(cc.egui_ctx.clone());
+        let history = HistoryPanel::new(core.db.clone());
         let mut app = AranApp {
             core,
             active: None,
@@ -115,14 +169,27 @@ impl AranApp {
             side,
             pane,
             tasks,
+            issues,
+            git,
+            history,
             last_in_group: HashMap::new(),
             confirm_close_group: None,
             cap_dialog: None,
             renaming: None,
             summary: None,
             app_rss_kb,
+            focus_terminal: false,
+            suggestions_on: true,
+            updater: crate::updater::Updater::new(cc.egui_ctx.clone()),
+            update_auto: true,
+            confirm_update: None,
             error: None,
         };
+        app.suggestions_on = db::get_setting(&lock(&app.core.db), KEY_SUGGEST).as_deref() != Some("0");
+        app.update_auto = db::get_setting(&lock(&app.core.db), KEY_UPDATE_AUTO).as_deref() != Some("0");
+        if app.update_auto {
+            app.updater.start_background_checks();
+        }
         app.new_tab(None);
         app
     }
@@ -145,6 +212,16 @@ impl AranApp {
     fn active_cwd(&self) -> Option<String> {
         let g = lock(&self.core.mgr);
         self.active.as_ref().and_then(|id| g.sessions.get(id)).and_then(|s| s.cwd.clone())
+    }
+
+    /// Type text at the active terminal's prompt (not submitted).
+    fn type_into_active(&mut self, text: &str) {
+        if let Some(id) = &self.active {
+            if let Some(s) = lock(&self.core.mgr).sessions.get(id) {
+                s.write(text.replace(['\r', '\n'], " ").as_bytes());
+            }
+        }
+        self.focus_terminal = true;
     }
 
     fn active_project(&self) -> Option<String> {
@@ -232,6 +309,15 @@ impl AranApp {
         if consume(cmd, Key::J) {
             self.toggle_pane(Pane::Tasks);
         }
+        if NEW_PANES && consume(cmd, Key::I) {
+            self.toggle_pane(Pane::Issues);
+        }
+        if NEW_PANES && consume(shift_cmd, Key::G) {
+            self.toggle_pane(Pane::Git);
+        }
+        if consume(cmd, Key::Y) {
+            self.toggle_pane(Pane::History);
+        }
         if consume(cmd, Key::Plus) || consume(cmd, Key::Equals) {
             self.font_size = (self.font_size + 1.0).min(32.0);
             self.metrics = None;
@@ -282,7 +368,7 @@ impl AranApp {
             }
         }
         self.setting(KEY_OPEN, if self.show_sidebar { "1" } else { "0" });
-        self.setting(KEY_TAB, if self.pane == Pane::Tasks { "tasks" } else { "dashboard" });
+        self.setting(KEY_TAB, self.pane.id());
     }
 
     // ---------------- header: group row + tab row ----------------
@@ -482,12 +568,29 @@ impl AranApp {
     fn header_actions(&mut self, ui: &mut egui::Ui) {
         let th = theme::t();
         // (Right-to-left layout: first added = rightmost.)
+        self.update_chip(ui);
         let side_icon = if self.side == Side::Right { "⇤" } else { "⇥" };
         if ui.add(egui::Button::new(RichText::new(side_icon).size(13.0)).frame(false)).on_hover_text("Move sidebar to the other side").clicked() {
             self.side = if self.side == Side::Right { Side::Left } else { Side::Right };
             self.setting(KEY_SIDE, if self.side == Side::Left { "left" } else { "right" });
         }
 
+        let hist_on = self.show_sidebar && self.pane == Pane::History;
+        if ui.add(egui::Button::selectable(hist_on, RichText::new("History").size(12.0))).on_hover_text("Command history  ⌘Y").clicked() {
+            self.toggle_pane(Pane::History);
+        }
+        let git_on = self.show_sidebar && self.pane == Pane::Git;
+        if NEW_PANES && ui.add(egui::Button::selectable(git_on, RichText::new("Git").size(12.0))).on_hover_text("Git panel  ⌘⇧G").clicked() {
+            self.toggle_pane(Pane::Git);
+        }
+        let issues_on = self.show_sidebar && self.pane == Pane::Issues;
+        let issues_label = match self.issues.open_count() {
+            Some(n) if n > 0 => format!("Issues {n}"),
+            _ => "Issues".into(),
+        };
+        if NEW_PANES && ui.add(egui::Button::selectable(issues_on, RichText::new(issues_label).size(12.0))).on_hover_text("Beads issues for this project  ⌘I").clicked() {
+            self.toggle_pane(Pane::Issues);
+        }
         let tasks_on = self.show_sidebar && self.pane == Pane::Tasks;
         let n = self.tasks.active_count();
         let tasks_label = if n > 0 { format!("Tasks {n}") } else { "Tasks".into() };
@@ -514,15 +617,45 @@ impl AranApp {
         }
     }
 
+    /// Header chip for OTA updates: offer → installing → error.
+    fn update_chip(&mut self, ui: &mut egui::Ui) {
+        use crate::updater::Status;
+        let th = theme::t();
+        match self.updater.status() {
+            Status::Available(r) => {
+                let b = egui::Button::new(RichText::new(format!("⬆ Update {}", r.version)).size(12.0).color(theme::ink_on(th.primary)))
+                    .fill(th.primary);
+                if ui.add(b).on_hover_text("A new version of Aran Terminal is available").clicked() {
+                    self.confirm_update = Some(r);
+                }
+            }
+            Status::Installing(msg) => {
+                ui.add(egui::Spinner::new().size(12.0));
+                ui.label(RichText::new(msg).size(11.0).color(th.muted));
+            }
+            Status::Failed(e) => {
+                if ui.add(egui::Button::new(RichText::new("✕").size(11.0).color(th.muted)).frame(false)).clicked() {
+                    self.updater.dismiss();
+                }
+                ui.add(egui::Label::new(RichText::new(format!("Update: {e}")).size(11.0).color(th.error)).truncate());
+            }
+            _ => {}
+        }
+    }
+
     // ---------------- sidebar ----------------
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let th = theme::t();
-        ui.horizontal(|ui| {
-            for (p, name) in [(Pane::Dashboard, "Dashboard"), (Pane::Tasks, "Tasks")] {
-                if ui.add(egui::Button::selectable(self.pane == p, RichText::new(name).strong())).clicked() && self.pane != p {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for p in Pane::ALL.into_iter().filter(|p| p.enabled()) {
+                if ui.add(egui::Button::selectable(self.pane == p, RichText::new(p.title()).strong().size(12.0))).clicked() && self.pane != p {
                     self.pane = p;
-                    self.setting(KEY_TAB, if p == Pane::Tasks { "tasks" } else { "dashboard" });
+                    self.setting(KEY_TAB, p.id());
+                    if p == Pane::Tasks {
+                        self.tasks.focus_input();
+                    }
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -538,6 +671,19 @@ impl AranApp {
             Pane::Tasks => {
                 let project = self.active_project();
                 self.tasks.show(ui, project);
+            }
+            Pane::Issues => {
+                let cwd = self.active_cwd();
+                self.issues.show(ui, cwd);
+            }
+            Pane::Git => {
+                let cwd = self.active_cwd();
+                self.git.show(ui, cwd);
+            }
+            Pane::History => {
+                if let Some(cmd) = self.history.show(ui) {
+                    self.type_into_active(&cmd);
+                }
             }
         }
     }
@@ -673,6 +819,31 @@ impl AranApp {
                     if ui.add(egui::Slider::new(&mut cap, 1..=20).text("max sessions")).changed() {
                         lock(&self.core.mgr).cap = cap;
                     }
+                    if ui
+                        .checkbox(&mut self.suggestions_on, "Command suggestions")
+                        .on_hover_text("Grey autocomplete from your history at the prompt: → accept, ↓ list, Esc hide")
+                        .changed()
+                    {
+                        db::set_setting(&lock(&self.core.db), KEY_SUGGEST, if self.suggestions_on { "1" } else { "0" });
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut self.update_auto, "Check for updates").changed() {
+                            db::set_setting(&lock(&self.core.db), KEY_UPDATE_AUTO, if self.update_auto { "1" } else { "0" });
+                            if self.update_auto {
+                                self.updater.start_background_checks();
+                            }
+                        }
+                        if ui.small_button("Check now").clicked() {
+                            self.updater.check_now();
+                        }
+                    });
+                    let note = match self.updater.status() {
+                        crate::updater::Status::Checking => "checking…".to_string(),
+                        crate::updater::Status::UpToDate => "you're up to date".to_string(),
+                        crate::updater::Status::Available(r) => format!("{} available", r.version),
+                        _ => String::new(),
+                    };
+                    ui.label(RichText::new(format!("Aran Terminal {}  {note}", crate::updater::CURRENT)).size(11.0).color(th.muted));
                     let mut secs = lock(&self.core.det).t_wait_secs();
                     if ui.add(egui::Slider::new(&mut secs, 2..=60).text("waiting after (s)")).changed() {
                         lock(&self.core.det).set_t_wait_secs(secs);
@@ -714,7 +885,7 @@ impl AranApp {
                 if kb > 0 {
                     ui.label(small(format!("app {}", fmt_kb(kb)), th.muted));
                 }
-                ui.label(small("⌘T tab  ⌘N new folder  ⌘B dashboard  ⌘J tasks".into(), th.muted));
+                ui.label(small("⌘T tab  ⌘N new folder  ⌘B dashboard  ⌘J tasks  ⌘Y history".into(), th.muted));
             });
         });
     }
@@ -785,7 +956,12 @@ impl eframe::App for AranApp {
             let mut g = lock(&self.core.mgr);
             let Some(s) = g.sessions.get_mut(&id) else { return };
             let view = self.views.entry(id).or_default();
-            term_view::show(ui, s, view, metrics);
+            let db = self.core.db.clone();
+            let lookup = move |prefix: &str, cwd: Option<&str>| {
+                db::command_suggestions(&lock(&db), prefix, cwd, crate::suggest::MAX_SUGGESTIONS)
+            };
+            let suggest: Option<term_view::SuggestFn<'_>> = self.suggestions_on.then_some(&lookup);
+            term_view::show(ui, s, view, metrics, suggest, std::mem::take(&mut self.focus_terminal));
             self.last_grid = s.size;
         });
 
@@ -828,6 +1004,46 @@ impl eframe::App for AranApp {
                         }
                         if ui.button("Cancel").clicked() {
                             self.cap_dialog = None;
+                        }
+                    });
+                });
+        }
+
+        if let crate::updater::Status::Installed(path) = self.updater.status() {
+            // Bundle swapped: quit, and the new version opens itself.
+            self.updater.dismiss(); // once only
+            crate::updater::relaunch(&path);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        if let Some(r) = self.confirm_update.clone() {
+            let open = lock(&self.core.mgr).sessions.len();
+            egui::Window::new(format!("Update to {}?", r.version))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(&ctx, |ui| {
+                    ui.label(format!("You're on {}. Aran restarts after the update.", crate::updater::CURRENT));
+                    if open > 0 {
+                        ui.label(RichText::new(format!("Your {open} open terminal(s) will be closed.")).color(th.waiting));
+                    }
+                    if !r.notes.trim().is_empty() {
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+                            ui.label(RichText::new(r.notes.trim()).size(11.5).color(th.muted));
+                        });
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Update & restart").clicked() {
+                            self.updater.install(r.clone());
+                            self.confirm_update = None;
+                        }
+                        if ui.button("Release page").clicked() {
+                            crate::updater::open_url(&r.page_url);
+                        }
+                        if ui.button("Later").clicked() {
+                            self.confirm_update = None;
                         }
                     });
                 });

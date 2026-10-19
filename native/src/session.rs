@@ -21,7 +21,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use rusqlite::Connection;
 
 use crate::detection::{DetectionEngine, Detector, StateEvent};
-use crate::ipc::{AttentionState, SessionId};
+use crate::ipc::{AttentionState, SessionId, StateSource};
 use crate::{db, notify, shell_integration};
 
 /// Lock a mutex, recovering the data if another thread panicked while holding it.
@@ -132,6 +132,9 @@ pub struct Session {
     pub pid: Option<u32>,
     pub rss_kb: Option<i64>,
     pub last_command: Option<String>,
+    /// The shell is showing its prompt (OSC 133 prompt seen, no command started since).
+    /// Command suggestions only appear here — never inside a running TUI like Claude Code.
+    pub at_prompt: bool,
 }
 
 impl Session {
@@ -307,6 +310,7 @@ impl Core {
                     pid,
                     rss_kb: None,
                     last_command: None,
+                    at_prompt: false,
                 },
             );
         }
@@ -424,6 +428,7 @@ impl SessionManager {
             if ev.command_started {
                 s.command_count += 1;
             }
+            s.at_prompt = prompt_after(s.at_prompt, ev);
             if let Some(t) = &ev.command_text {
                 s.last_command = Some(t.clone());
             }
@@ -482,6 +487,21 @@ impl SessionManager {
             }
             _ => true,
         }
+    }
+}
+
+/// Whether the shell is at its prompt after `ev`. Only shell-integration markers move it:
+/// a command start leaves the prompt, an OSC 133 transition to IDLE (prompt drawn /
+/// command finished) returns to it. Heuristic events never put us "at the prompt".
+fn prompt_after(was: bool, ev: &StateEvent) -> bool {
+    if ev.command_started {
+        false
+    } else if ev.source == StateSource::Osc133 && ev.state == AttentionState::Idle {
+        true
+    } else if ev.state == AttentionState::Waiting {
+        false
+    } else {
+        was
     }
 }
 
@@ -550,6 +570,27 @@ mod tests {
         let t = ProcTable { rss, children };
         assert_eq!(subtree_rss(200, &t), Some(82_020));
         assert_eq!(subtree_rss(999, &t), None);
+    }
+
+    #[test]
+    fn prompt_tracking() {
+        let mk = |state, source, started| StateEvent {
+            session: "s".into(),
+            state,
+            source,
+            cwd: None,
+            command_started: started,
+            command_finished: None,
+            command_text: None,
+        };
+        let idle_osc = mk(AttentionState::Idle, StateSource::Osc133, false);
+        let start = mk(AttentionState::Running, StateSource::Osc133, true);
+        let idle_heur = mk(AttentionState::Idle, StateSource::Heuristic, false);
+        assert!(prompt_after(false, &idle_osc));
+        assert!(!prompt_after(true, &start));
+        // A quiet TUI going IDLE by heuristic must not count as a prompt.
+        assert!(!prompt_after(false, &idle_heur));
+        assert!(prompt_after(true, &idle_heur));
     }
 
     #[test]

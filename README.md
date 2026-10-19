@@ -18,14 +18,14 @@ Since **v3.0.0** the UI is egui + `alacritty_terminal`: a ~6 MB universal downlo
 
 <br />
 
-### [⬇️ Download for macOS (Apple Silicon + Intel) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.0_universal.dmg)
+### [⬇️ Download for macOS (Apple Silicon + Intel) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.1_universal.dmg)
 
-[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Universal)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.0_universal.dmg)
+[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Universal)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.1_universal.dmg)
 
 <sub>~6 MB · not notarized — on first launch allow it in **System Settings → Privacy & Security → Open Anyway**
 (or `xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"`) · maintainers: see [SIGNING.md](conductor/SIGNING.md)</sub>
 
-### [⬇️ Download for Linux (x86_64) — .tar.gz](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.0_linux_x86_64.tar.gz)
+### [⬇️ Download for Linux (x86_64) — .tar.gz](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.1_linux_x86_64.tar.gz)
 
 <sub>Extract and run `./aran`. The v2 Tauri builds (.deb / .rpm / .AppImage) remain on the
 [v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).</sub>
@@ -65,12 +65,18 @@ notifies you when a session goes quiet or asks a question.
 - **Shell integration** — auto-generated, non-destructive zsh/bash hooks that source your real
   config and add OSC 133 markers (never replaces your dotfiles).
 - **Native notifications** — when a session finishes a long command or starts waiting on you.
-- **Themes** — Dracula, Tokyo Night Storm, GitHub Light.
+- **Command suggestions** — grey autocomplete from your history at the shell prompt
+  (→ accept, ↓ list, Esc hide). Never shows inside Claude Code or other full-screen apps.
+- **Mouse reporting** — wheel and clicks go to TUI apps that ask for them (Claude Code,
+  vim, htop), so scrolling scrolls the app instead of walking its prompt history.
+- **Command history** pane (⌘Y) — search everything you ran, click to type it again.
+- **Over-the-air updates** (from v3.0.1) — the app checks GitHub Releases and updates itself.
+- **Themes** — Dracula, Tokyo Night Storm, GitHub Light, Catppuccin Mocha, GitHub Dark,
+  One Dark, Material Palenight, Nord.
 - **Local-first persistence** — SQLite (WAL mode) via `rusqlite`.
 
-**v2 only (Tauri build, not yet ported to v3):** Warp-style command blocks, command history
-autofill, focus timer, Git panel, GitHub Issues sidebar, session restore with scrollback,
-the in-app auto-updater and the extra themes. Get them from the
+**v2 only (Tauri build, not yet ported to v3):** Warp-style command blocks, focus timer,
+Git panel, GitHub Issues sidebar and session restore with scrollback. Get them from the
 [v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).
 
 ## Stack

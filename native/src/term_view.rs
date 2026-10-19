@@ -1,16 +1,20 @@
 //! Terminal widget: paints an `alacritty_terminal` grid with egui's painter and turns
 //! egui input into the byte sequences a terminal expects. Replaces xterm.js.
 
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{point_to_viewport, viewport_to_point, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2};
 
-use crate::session::{GridSize, Session};
+use crate::session::{GridSize, Session, SharedTerm};
+use crate::suggest::{Anchor, KeyAction, Suggest};
 use crate::theme;
+
+/// Looks up command suggestions: (prefix, cwd) → full command lines.
+pub type SuggestFn<'a> = &'a dyn Fn(&str, Option<&str>) -> Vec<String>;
 
 /// Per-widget state kept between frames.
 #[derive(Default)]
@@ -18,6 +22,14 @@ pub struct TermViewState {
     /// Fractional scroll accumulated from trackpads (one line = one cell height).
     scroll_acc: f32,
     selecting: bool,
+    suggest: Suggest,
+    /// Wheel lines not yet turned into PageUp/PageDown (full-screen apps).
+    page_acc: i32,
+    /// Button held while the app has mouse reporting on (for drag/release reports).
+    mouse_down: Option<u8>,
+    last_motion_cell: Option<(usize, usize)>,
+    /// The ghost text was drawn last frame (→ only accepts what the user can see).
+    ghost_shown: bool,
 }
 
 pub struct CellMetrics {
@@ -42,7 +54,15 @@ impl CellMetrics {
 }
 
 /// Draw the session and handle its input. Returns true if the user typed into it.
-pub fn show(ui: &mut egui::Ui, session: &mut Session, st: &mut TermViewState, m: &CellMetrics) -> bool {
+/// `suggest` = command autocomplete source (None = turned off).
+pub fn show(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    st: &mut TermViewState,
+    m: &CellMetrics,
+    suggest: Option<SuggestFn<'_>>,
+    grab_focus: bool,
+) -> bool {
     let avail = ui.available_rect_before_wrap();
     let pad = 6.0;
     let inner = avail.shrink(pad);
@@ -50,7 +70,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, st: &mut TermViewState, m:
 
     let id = ui.scope_id().with("terminal");
     let resp = ui.interact(avail, id, Sense::click_and_drag());
-    if resp.clicked() || resp.drag_started() || !ui.ctx().memory(|mem| mem.focused().is_some()) {
+    if grab_focus || resp.clicked() || resp.drag_started() || !ui.ctx().memory(|mem| mem.focused().is_some()) {
         resp.request_focus();
     }
     // Keep Tab / arrows / Escape inside the terminal instead of moving egui focus.
@@ -60,12 +80,131 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, st: &mut TermViewState, m:
             egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
         )
     });
-    let focused = resp.has_focus();
+    let focused = resp.has_focus() || grab_focus;
 
-    let typed = if focused { handle_keys(ui, session) } else { false };
+    // Suggestions only at a real shell prompt: never inside full-screen apps or a
+    // running command (Claude Code, vim, a REPL …).
+    let suggesting = suggest.is_some()
+        && session.at_prompt
+        && !session.term.lock().mode().contains(TermMode::ALT_SCREEN);
+    if !suggesting {
+        st.suggest.reset();
+    }
+
+    let typed = if focused { handle_keys(ui, session, st, suggesting) } else { false };
     handle_mouse(ui, &resp, session, st, m, inner);
-    paint(ui, session, m, inner, avail, focused);
+
+    let mut ghost = None;
+    if let (true, Some(lookup)) = (suggesting, suggest) {
+        let line = st.suggest.anchor().and_then(|a| line_since(&session.term, a));
+        if let Some(prefix) = st.suggest.sync(line) {
+            let items = lookup(&prefix, session.cwd.as_deref());
+            st.suggest.set_items(&prefix, items);
+        }
+        ghost = st.suggest.ghost().filter(|g| room_for_ghost(&session.term, g)).map(str::to_string);
+    }
+    st.ghost_shown = ghost.is_some();
+    let cursor_rect = paint(ui, session, m, inner, avail, focused, ghost.as_deref());
+    if focused && st.suggest.panel_open() {
+        if let Some(rect) = cursor_rect {
+            suggestion_list(ui, id, session, st, m, rect, avail);
+        }
+    }
     typed
+}
+
+/// Cursor position in scrollback-independent coordinates.
+fn cursor_anchor(term: &SharedTerm) -> Anchor {
+    let t = term.lock();
+    let g = t.grid();
+    Anchor { line: g.cursor.point.line.0 as i64 + g.history_size() as i64, col: g.cursor.point.column.0 }
+}
+
+/// The text between `a` and the cursor (the command line typed after the prompt).
+fn line_since(term: &SharedTerm, a: Anchor) -> Option<String> {
+    let t = term.lock();
+    let g = t.grid();
+    let hist = g.history_size() as i64;
+    let cols = g.columns();
+    let start = a.line - hist;
+    let cur = g.cursor.point;
+    let end = cur.line.0 as i64;
+    if start < -hist || start > end || (start == end && a.col > cur.column.0) || end - start > 20 {
+        return None;
+    }
+    let mut out = String::new();
+    for l in start..=end {
+        let row = &g[Line(l as i32)];
+        let c0 = if l == start { a.col } else { 0 };
+        let c1 = if l == end { cur.column.0 } else { cols };
+        for c in c0..c1.min(cols) {
+            let cell = &row[Column(c)];
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                continue;
+            }
+            out.push(if cell.c == '\0' { ' ' } else { cell.c });
+        }
+    }
+    Some(out)
+}
+
+/// The cells the ghost would cover are empty (no zsh-autosuggestions text or RPROMPT
+/// there) and it fits on the row.
+fn room_for_ghost(term: &SharedTerm, ghost: &str) -> bool {
+    let t = term.lock();
+    let g = t.grid();
+    let cur = g.cursor.point;
+    let n = ghost.chars().count();
+    if cur.column.0 + n > g.columns() {
+        return true; // drawn clipped; the tail can't collide with anything visible
+    }
+    let row = &g[cur.line];
+    (cur.column.0..cur.column.0 + n).all(|c| matches!(row[Column(c)].c, ' ' | '\0'))
+}
+
+/// The ↓ list of suggestions under (or above) the cursor. Click = accept.
+fn suggestion_list(ui: &egui::Ui, id: egui::Id, session: &Session, st: &mut TermViewState, m: &CellMetrics, cursor: Rect, outer: Rect) {
+    let th = theme::t();
+    let items: Vec<String> = st.suggest.items().to_vec();
+    let sel = st.suggest.selected();
+    let row_h = m.h + 4.0;
+    let height = items.len() as f32 * row_h + 10.0;
+    let below = cursor.max.y + 2.0 + height <= outer.max.y;
+    let y = if below { cursor.max.y + 2.0 } else { (cursor.min.y - 2.0 - height).max(outer.min.y) };
+    let x = cursor.min.x.min(outer.max.x - 260.0).max(outer.min.x);
+    let mut clicked = None;
+    egui::Area::new(id.with("suggest"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(Pos2::new(x, y))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::new()
+                .fill(th.panel)
+                .stroke(Stroke::new(1.0, th.border))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::same(4))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let width = (outer.max.x - x - 16.0).clamp(160.0, 640.0);
+                    for (i, s) in items.iter().enumerate() {
+                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, row_h), Sense::click());
+                        if i == sel || resp.hovered() {
+                            ui.painter().rect_filled(rect, CornerRadius::same(4), if i == sel { th.selection } else { th.border.gamma_multiply(0.4) });
+                        }
+                        let text = ui.painter().layout_no_wrap(s.clone(), m.font.clone(), th.text);
+                        let clip = rect.shrink2(Vec2::new(6.0, 0.0));
+                        ui.painter().with_clip_rect(clip).galley(Pos2::new(clip.min.x, rect.center().y - text.size().y / 2.0), text, th.text);
+                        if resp.clicked() {
+                            clicked = Some(i);
+                        }
+                    }
+                    ui.label(egui::RichText::new("→ accept · ↑↓ choose · Esc hide").size(10.0).color(th.muted));
+                });
+        });
+    if let Some(i) = clicked {
+        if let KeyAction::Accept(rest) = st.suggest.accept(i) {
+            session.write(rest.as_bytes());
+        }
+    }
 }
 
 // ---------------- painting ----------------
@@ -88,7 +227,9 @@ fn resolve(color: Color, colors: &alacritty_terminal::term::color::Colors, bold:
     }
 }
 
-fn paint(ui: &egui::Ui, session: &Session, m: &CellMetrics, inner: Rect, outer: Rect, focused: bool) {
+/// Paint the grid. Returns the cursor cell's rect when it's on screen.
+fn paint(ui: &egui::Ui, session: &Session, m: &CellMetrics, inner: Rect, outer: Rect, focused: bool, ghost: Option<&str>) -> Option<Rect> {
+    let mut cursor_rect = None;
     let painter = ui.painter_at(outer);
     painter.rect_filled(outer, CornerRadius::ZERO, theme::t().bg);
 
@@ -201,12 +342,25 @@ fn paint(ui: &egui::Ui, session: &Session, m: &CellMetrics, inner: Rect, outer: 
     }
     flush(&mut run, run_start, run_style);
 
+    // Autocomplete ghost: the rest of the suggestion, greyed, from the cursor on.
+    let ghost_first = ghost.and_then(|g| {
+        let vp = point_to_viewport(offset, content.cursor.point)?;
+        let room = cols.saturating_sub(vp.column.0);
+        let shown: String = g.chars().take(room).collect();
+        if offset == 0 && !shown.is_empty() {
+            let p = cell_pos(vp.line, vp.column.0);
+            painter.text(p, egui::Align2::LEFT_TOP, &shown, m.font.clone(), theme::t().muted.gamma_multiply(0.9));
+        }
+        shown.chars().next()
+    });
+
     // Cursor (only when the app shows it and we're not scrolled back).
     if content.mode.contains(TermMode::SHOW_CURSOR) && content.cursor.shape != CursorShape::Hidden {
         if let Some(vp) = point_to_viewport(offset, content.cursor.point) {
             if vp.column.0 < cols {
                 let p = cell_pos(vp.line, vp.column.0);
                 let full = Rect::from_min_size(p, Vec2::new(m.w, m.h));
+                cursor_rect = Some(full);
                 let color = theme::t().cursor;
                 match (focused, content.cursor.shape) {
                     (false, _) | (true, CursorShape::HollowBlock) => {
@@ -224,7 +378,10 @@ fn paint(ui: &egui::Ui, session: &Session, m: &CellMetrics, inner: Rect, outer: 
                     }
                     (true, _) => {
                         painter.rect_filled(full, CornerRadius::ZERO, color);
-                        let ch = term.grid()[content.cursor.point].c;
+                        let mut ch = term.grid()[content.cursor.point].c;
+                        if ch == ' ' || ch == '\0' {
+                            ch = ghost_first.unwrap_or(ch);
+                        }
                         if ch != ' ' && ch != '\0' {
                             painter.text(p, egui::Align2::LEFT_TOP, ch, m.font.clone(), theme::t().bg);
                         }
@@ -254,6 +411,7 @@ fn paint(ui: &egui::Ui, session: &Session, m: &CellMetrics, inner: Rect, outer: 
             theme::t().muted,
         );
     }
+    cursor_rect
 }
 
 // ---------------- mouse ----------------
@@ -276,6 +434,16 @@ fn handle_mouse(
     inner: Rect,
 ) {
     let size = session.size;
+    let mode = *session.term.lock().mode();
+    // Shift forces Aran's own selection/scrollback even when the app wants the mouse
+    // (same convention as iTerm2 / Terminal.app).
+    let shift = ui.input(|i| i.modifiers.shift);
+    let reporting = mode.intersects(TermMode::MOUSE_MODE) && !shift;
+    let cell_at = |pos: Pos2| -> (usize, usize) {
+        let col = (((pos.x - inner.min.x) / m.w).max(0.0) as usize).min(size.cols - 1);
+        let row = (((pos.y - inner.min.y) / m.h).max(0.0) as usize).min(size.rows - 1);
+        (col, row)
+    };
 
     // Wheel / trackpad.
     if resp.hovered() {
@@ -298,21 +466,82 @@ fn handle_mouse(
             let lines = st.scroll_acc.trunc() as i32;
             if lines != 0 {
                 st.scroll_acc -= lines as f32;
-                let mut term = session.term.lock();
-                let mode = *term.mode();
-                if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
-                    // Full-screen apps (less, vim, Claude Code) get arrow keys instead.
-                    let seq: &[u8] = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
-                    drop(term);
+                let alt = mode.contains(TermMode::ALT_SCREEN);
+                if reporting {
+                    // The app asked for the mouse (Claude Code, vim, htop …): send real
+                    // wheel events so it scrolls its own view. Never arrow keys — those
+                    // recall prompt history in chat-style TUIs.
+                    let (col, row) = ui.input(|i| i.pointer.hover_pos()).map(cell_at).unwrap_or((0, 0));
+                    let button = if lines > 0 { 64 } else { 65 };
+                    let mods = ui.input(|i| i.modifiers);
                     for _ in 0..lines.unsigned_abs().min(10) {
-                        session.write(seq);
+                        if let Some(b) = mouse_report(mode, button + mouse_mods(mods), col, row, true) {
+                            session.write(&b);
+                        }
+                    }
+                } else if alt && !shift {
+                    // Full-screen app without mouse support (less, man …): page keys,
+                    // one per half screen of wheel travel, so the content scrolls
+                    // instead of a prompt's history being walked.
+                    st.page_acc += lines;
+                    let step = (size.rows as i32 / 2).max(1);
+                    while st.page_acc.abs() >= step {
+                        let up = st.page_acc > 0;
+                        session.write(if up { b"\x1b[5~" } else { b"\x1b[6~" });
+                        st.page_acc -= if up { step } else { -step };
                     }
                 } else {
-                    term.scroll_display(Scroll::Delta(lines));
+                    st.page_acc = 0;
+                    session.term.lock().scroll_display(Scroll::Delta(lines));
                 }
             }
         }
     }
+
+    // Clicks / drags go to the app when it asked for them.
+    if reporting {
+        let mods = ui.input(|i| i.modifiers);
+        let events = ui.input(|i| i.events.clone());
+        for ev in events {
+            match ev {
+                egui::Event::PointerButton { pos, button, pressed, .. } if inner.expand(6.0).contains(pos) || !pressed => {
+                    let code = match button {
+                        egui::PointerButton::Primary => 0,
+                        egui::PointerButton::Middle => 1,
+                        egui::PointerButton::Secondary => 2,
+                        _ => continue,
+                    };
+                    if !pressed && st.mouse_down.is_none() {
+                        continue; // release of a press that started elsewhere
+                    }
+                    st.mouse_down = pressed.then_some(code);
+                    let (col, row) = cell_at(pos);
+                    if let Some(b) = mouse_report(mode, code + mouse_mods(mods), col, row, pressed) {
+                        session.write(&b);
+                    }
+                }
+                egui::Event::PointerMoved(pos) if inner.contains(pos) => {
+                    let (col, row) = cell_at(pos);
+                    if st.last_motion_cell == Some((col, row)) {
+                        continue;
+                    }
+                    let code = match st.mouse_down {
+                        Some(b) if mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION) => b + 32,
+                        None if mode.contains(TermMode::MOUSE_MOTION) => 35,
+                        _ => continue,
+                    };
+                    st.last_motion_cell = Some((col, row));
+                    if let Some(b) = mouse_report(mode, code + mouse_mods(mods), col, row, true) {
+                        session.write(&b);
+                    }
+                }
+                _ => {}
+            }
+        }
+        session.term.lock().selection = None;
+        return;
+    }
+    st.mouse_down = None;
 
     // Selection: drag = simple, double-click = word, triple-click = line.
     let Some(pos) = resp.interact_pointer_pos() else {
@@ -339,6 +568,36 @@ fn handle_mouse(
     } else if resp.clicked() {
         term.selection = None;
     }
+}
+
+/// xterm mouse modifier bits: shift 4, alt/meta 8, ctrl 16.
+fn mouse_mods(m: Modifiers) -> u8 {
+    4 * m.shift as u8 + 8 * m.alt as u8 + 16 * m.ctrl as u8
+}
+
+/// Encode one mouse event for the app (0-based cell). SGR (`ESC[<b;x;yM/m`) when
+/// the app asked for it, else the legacy X10 form (which can't address past col 223).
+fn mouse_report(mode: TermMode, button: u8, col: usize, row: usize, pressed: bool) -> Option<Vec<u8>> {
+    let (x, y) = (col + 1, row + 1);
+    if mode.contains(TermMode::SGR_MOUSE) {
+        let end = if pressed { 'M' } else { 'm' };
+        return Some(format!("\x1b[<{button};{x};{y}{end}").into_bytes());
+    }
+    // Legacy: a release is button 3 (wheel events have no release).
+    let b = if pressed { button } else { 3 + (button & !3) };
+    let enc = |v: usize| -> Option<Vec<u8>> {
+        let v = v + 32;
+        if mode.contains(TermMode::UTF8_MOUSE) {
+            char::from_u32(v as u32).filter(|_| v < 2048).map(|c| c.to_string().into_bytes())
+        } else {
+            u8::try_from(v).ok().map(|b| vec![b])
+        }
+    };
+    let mut out = b"\x1b[M".to_vec();
+    out.push(32u8.checked_add(b)?);
+    out.extend(enc(x)?);
+    out.extend(enc(y)?);
+    Some(out)
 }
 
 // ---------------- keyboard ----------------
@@ -430,10 +689,17 @@ fn key_bytes(key: Key, m: Modifiers, app_cursor: bool) -> Option<Vec<u8>> {
     })
 }
 
-fn handle_keys(ui: &egui::Ui, session: &Session) -> bool {
+fn handle_keys(ui: &egui::Ui, session: &Session, st: &mut TermViewState, suggesting: bool) -> bool {
     let events = ui.input(|i| i.events.clone());
     let app_cursor = session.term.lock().mode().contains(TermMode::APP_CURSOR);
     let mut typed = false;
+    // Every byte headed for the shell also goes through the suggestion tracker.
+    let send = |st: &mut TermViewState, bytes: &[u8]| {
+        if suggesting {
+            st.suggest.feed(bytes, cursor_anchor(&session.term));
+        }
+        session.write(bytes);
+    };
 
     for ev in events {
         match ev {
@@ -442,20 +708,36 @@ fn handle_keys(ui: &egui::Ui, session: &Session) -> bool {
                 if modifiers.command && !modifiers.ctrl {
                     continue;
                 }
+                // → only takes a suggestion the user can actually see.
+                let hidden_ghost = key == Key::ArrowRight && !st.ghost_shown && !st.suggest.panel_open();
+                if suggesting && !hidden_ghost {
+                    match st.suggest.on_key(key, modifiers) {
+                        KeyAction::Pass => {}
+                        KeyAction::Consumed => continue,
+                        KeyAction::Accept(rest) => {
+                            session.write(rest.as_bytes());
+                            typed = true;
+                            continue;
+                        }
+                    }
+                }
                 if let Some(bytes) = key_bytes(key, modifiers, app_cursor) {
-                    session.write(&bytes);
+                    send(st, &bytes);
                     typed = true;
                 }
             }
             egui::Event::Text(t) => {
-                session.write(t.as_bytes());
+                send(st, t.as_bytes());
                 typed = true;
             }
             egui::Event::Ime(egui::ImeEvent::Commit(t)) => {
-                session.write(t.as_bytes());
+                send(st, t.as_bytes());
                 typed = true;
             }
             egui::Event::Paste(t) => {
+                if suggesting {
+                    st.suggest.feed_paste(&t, cursor_anchor(&session.term));
+                }
                 paste(session, &t);
                 typed = true;
             }
@@ -499,6 +781,19 @@ mod tests {
         assert_eq!(key_bytes(Key::ArrowUp, none, true).unwrap(), b"\x1bOA");
         let shift = Modifiers { shift: true, ..none };
         assert_eq!(key_bytes(Key::ArrowLeft, shift, false).unwrap(), b"\x1b[1;2D");
+    }
+
+    #[test]
+    fn mouse_reports() {
+        let sgr = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        assert_eq!(mouse_report(sgr, 64, 4, 9, true).unwrap(), b"\x1b[<64;5;10M");
+        assert_eq!(mouse_report(sgr, 0, 0, 0, false).unwrap(), b"\x1b[<0;1;1m");
+        let x10 = TermMode::MOUSE_REPORT_CLICK;
+        assert_eq!(mouse_report(x10, 65, 0, 0, true).unwrap(), vec![0x1b, b'[', b'M', 32 + 65, 33, 33]);
+        assert_eq!(mouse_report(x10, 0, 0, 0, false).unwrap(), vec![0x1b, b'[', b'M', 32 + 3, 33, 33]);
+        assert!(mouse_report(x10, 0, 300, 0, true).is_none(), "X10 can't address col 301");
+        let ctrl = Modifiers { ctrl: true, ..Modifiers::NONE };
+        assert_eq!(mouse_mods(ctrl), 16);
     }
 
     #[test]

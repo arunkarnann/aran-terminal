@@ -74,7 +74,8 @@ jobs:
         with:
           name: "Aran Terminal ${{ github.ref_name }}"
           body: |
-            Aran Terminal is now pure Rust: no webview, no JavaScript.
+            Aran Terminal is pure Rust: no webview, no JavaScript. v3.0.1+ updates itself
+            (⬆ Update button in the header); v3.0.0 needs this one manual download.
             macOS: download the .dmg and drag to Applications. It isn't notarized, so on first
             launch allow it in System Settings → Privacy & Security → "Open Anyway"
             (or run `xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"`).

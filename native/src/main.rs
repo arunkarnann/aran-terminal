@@ -19,14 +19,22 @@ mod detection;
 mod shell_integration;
 #[path = "../../conductor/src-tauri/src/notify.rs"]
 mod notify;
+#[allow(dead_code)]
+#[path = "../../conductor/src-tauri/src/git.rs"]
+mod git;
 
 mod app;
+mod beads;
+mod git_panel;
+mod history;
 mod fonts;
 mod tasks;
 mod timefmt;
 mod session;
+mod suggest;
 mod term_view;
 mod theme;
+mod updater;
 
 use std::sync::{Arc, Mutex};
 

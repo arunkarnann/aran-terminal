@@ -31,7 +31,7 @@ pub struct Theme {
     pub ansi: [Color32; 16],
 }
 
-pub static THEMES: [Theme; 3] = [
+pub static THEMES: [Theme; 8] = [
     Theme {
         id: "dracula",
         name: "Dracula",
@@ -99,6 +99,121 @@ pub static THEMES: [Theme; 3] = [
             hex(0x0969da), hex(0x8250df), hex(0x1b7c83), hex(0x6e7781),
             hex(0x656d76), hex(0xe44b55), hex(0x26a148), hex(0xb08800),
             hex(0x218bff), hex(0xa475e5), hex(0x31929a), hex(0x8c959f),
+        ],
+    },
+    Theme {
+        id: "catppuccin-mocha",
+        name: "Catppuccin Mocha",
+        dark: true,
+        bg: hex(0x1e1e2e),
+        panel: hex(0x181825),
+        border: hex(0x313244),
+        text: hex(0xcdd6f4),
+        muted: hex(0x585b70),
+        primary: hex(0xcba6f7),
+        running: hex(0xa6e3a1),
+        idle: hex(0x6c7086),
+        waiting: hex(0xf9e2af),
+        error: hex(0xf38ba8),
+        cursor: hex(0xf5e0dc),
+        selection: hex(0x45475a),
+        ansi: [
+            hex(0x45475a), hex(0xf38ba8), hex(0xa6e3a1), hex(0xf9e2af),
+            hex(0x89b4fa), hex(0xcba6f7), hex(0x94e2d5), hex(0xbac2de),
+            hex(0x585b70), hex(0xf5a0b8), hex(0xb4e8b0), hex(0xfce8c0),
+            hex(0xa0c4fe), hex(0xd4b0fb), hex(0xa0e8d8), hex(0xcdd6f4),
+        ],
+    },
+    Theme {
+        id: "github-dark",
+        name: "GitHub Dark",
+        dark: true,
+        bg: hex(0x0d1117),
+        panel: hex(0x161b22),
+        border: hex(0x30363d),
+        text: hex(0xe6edf3),
+        muted: hex(0x8b949e),
+        primary: hex(0x58a6ff),
+        running: hex(0x3fb950),
+        idle: hex(0x8b949e),
+        waiting: hex(0xd29922),
+        error: hex(0xf85149),
+        cursor: hex(0xe6edf3),
+        selection: hex(0x30363d),
+        ansi: [
+            hex(0x21262d), hex(0xf85149), hex(0x3fb950), hex(0xd29922),
+            hex(0x58a6ff), hex(0xbc8cff), hex(0x39d2c0), hex(0x8b949e),
+            hex(0x484f58), hex(0xfa6e64), hex(0x56d364), hex(0xe3b341),
+            hex(0x79c0ff), hex(0xd2a8ff), hex(0x56d4c4), hex(0xb1bac4),
+        ],
+    },
+    Theme {
+        id: "one-dark",
+        name: "One Dark",
+        dark: true,
+        bg: hex(0x282c34),
+        panel: hex(0x21252b),
+        border: hex(0x3b4048),
+        text: hex(0xabb2bf),
+        muted: hex(0x5c6370),
+        primary: hex(0x61afef),
+        running: hex(0x98c379),
+        idle: hex(0x5c6370),
+        waiting: hex(0xe5c07b),
+        error: hex(0xe06c75),
+        cursor: hex(0xabb2bf),
+        selection: hex(0x3b4048),
+        ansi: [
+            hex(0x282c34), hex(0xe06c75), hex(0x98c379), hex(0xe5c07b),
+            hex(0x61afef), hex(0xc678dd), hex(0x56b6c2), hex(0xabb2bf),
+            hex(0x5c6370), hex(0xe9848c), hex(0xa8d88a), hex(0xefd090),
+            hex(0x82baf7), hex(0xd48fe8), hex(0x6cc7d3), hex(0xc8ccd4),
+        ],
+    },
+    Theme {
+        id: "material-palenight",
+        name: "Material Palenight",
+        dark: true,
+        bg: hex(0x292d3e),
+        panel: hex(0x202331),
+        border: hex(0x393f4f),
+        text: hex(0xbabed8),
+        muted: hex(0x676e95),
+        primary: hex(0xc792ea),
+        running: hex(0xc3e88d),
+        idle: hex(0x676e95),
+        waiting: hex(0xffcb6b),
+        error: hex(0xf07178),
+        cursor: hex(0xbabed8),
+        selection: hex(0x393f4f),
+        ansi: [
+            hex(0x202331), hex(0xf07178), hex(0xc3e88d), hex(0xffcb6b),
+            hex(0x82aaff), hex(0xc792ea), hex(0x89ddff), hex(0x959dcb),
+            hex(0x676e95), hex(0xf48a90), hex(0xd0eea0), hex(0xffd880),
+            hex(0x94baff), hex(0xd4a0f4), hex(0x94e4ff), hex(0xbabed8),
+        ],
+    },
+    Theme {
+        id: "nord",
+        name: "Nord",
+        dark: true,
+        bg: hex(0x2e3440),
+        panel: hex(0x3b4252),
+        border: hex(0x434c5e),
+        text: hex(0xeceff4),
+        muted: hex(0x616e88),
+        primary: hex(0x88c0d0),
+        running: hex(0xa3be8c),
+        idle: hex(0x616e88),
+        waiting: hex(0xebcb8b),
+        error: hex(0xbf616a),
+        cursor: hex(0xeceff4),
+        selection: hex(0x434c5e),
+        ansi: [
+            hex(0x3b4252), hex(0xbf616a), hex(0xa3be8c), hex(0xebcb8b),
+            hex(0x81a1c1), hex(0xb48ead), hex(0x88c0d0), hex(0xe5e9f0),
+            hex(0x4c566a), hex(0xc9828a), hex(0xb2cf9a), hex(0xf0d89a),
+            hex(0x8fbcbb), hex(0xc4a3b8), hex(0x8fbcbb), hex(0xeceff4),
         ],
     },
 ];
@@ -264,5 +379,46 @@ mod tests {
         set_project_color("my=proj", None);
         assert!(!has_custom_color("my=proj"));
         assert_eq!(ink_on(Color32::WHITE), hex(0x14151c));
+    }
+
+    fn json_hex(v: &serde_json::Value, key: &str) -> Color32 {
+        let s = v[key].as_str().unwrap_or_else(|| panic!("missing {key}"));
+        let n = u32::from_str_radix(s.trim_start_matches('#'), 16)
+            .unwrap_or_else(|_| panic!("bad hex for {key}: {s}"));
+        hex(n)
+    }
+
+    #[test]
+    fn themes_match_tauri_json() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../conductor/src/themes");
+        let mut seen = std::collections::HashSet::new();
+        for th in &THEMES {
+            assert!(seen.insert(th.id), "duplicate theme id {}", th.id);
+            let path = dir.join(format!("{}.json", th.id));
+            let raw = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("no JSON for theme {}: {e}", th.id));
+            let j: serde_json::Value = serde_json::from_str(&raw).expect("valid theme JSON");
+            let (c, term) = (&j["colors"], &j["terminal"]);
+            assert_eq!(j["name"].as_str(), Some(th.name), "{}", th.id);
+            assert_eq!(j["type"].as_str() == Some("dark"), th.dark, "{}", th.id);
+            let ui = [
+                ("bg", th.bg), ("panel", th.panel), ("border", th.border), ("text", th.text),
+                ("muted", th.muted), ("primary", th.primary), ("running", th.running),
+                ("idle", th.idle), ("waiting", th.waiting), ("error", th.error),
+            ];
+            for (k, v) in ui {
+                assert_eq!(json_hex(c, k), v, "{} colors.{k}", th.id);
+            }
+            assert_eq!(json_hex(term, "cursor"), th.cursor, "{} cursor", th.id);
+            assert_eq!(json_hex(term, "selectionBackground"), th.selection, "{} selection", th.id);
+            let names = [
+                "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+                "brightBlack", "brightRed", "brightGreen", "brightYellow",
+                "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
+            ];
+            for (k, v) in names.iter().zip(th.ansi) {
+                assert_eq!(json_hex(term, k), v, "{} terminal.{k}", th.id);
+            }
+        }
     }
 }
