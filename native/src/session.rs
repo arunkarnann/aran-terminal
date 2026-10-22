@@ -14,15 +14,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config as TermConfig, Term};
+use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 use eframe::egui;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use rusqlite::Connection;
 
+use crate::blocks::{Blocks, MarkerScanner, TermHandler};
 use crate::detection::{DetectionEngine, Detector, StateEvent};
-use crate::ipc::{AttentionState, SessionId, StateSource};
-use crate::{db, notify, shell_integration};
+use crate::ipc::{AttentionState, SessionId, SessionSnapshot, StateSource};
+use crate::{db, notify, scrollback, shell_integration};
 
 /// Lock a mutex, recovering the data if another thread panicked while holding it.
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -52,6 +53,17 @@ fn default_shell() -> String {
 /// A command running at least this long fires a "finished" notification.
 const LONG_COMMAND_MS: i64 = 10_000;
 const SCROLLBACK_LINES: usize = 10_000;
+/// Open tabs are snapshotted (metadata + scrollback) this often for restore-on-launch.
+const SNAPSHOT_EVERY_SECS: u64 = 30;
+
+/// What a restored tab brings back from its snapshot.
+#[derive(Default)]
+pub struct Restore {
+    pub name: Option<String>,
+    pub task_label: Option<String>,
+    /// Serialized scrollback (see `scrollback.rs`), replayed before the shell starts.
+    pub scrollback: Option<Vec<u8>>,
+}
 
 /// Grid size handed to alacritty.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,7 +137,12 @@ pub struct Session {
     pub size: GridSize,
     pub created_at: i64,
     pub name: Option<String>,
+    /// Free-text "what am I doing here" label (dashboard + Focus view).
+    pub task_label: Option<String>,
+    pub shell: String,
     pub state: AttentionState,
+    /// When `state` last changed (drives "waiting 4m").
+    pub state_since: i64,
     pub cwd: Option<String>,
     pub project: Option<String>,
     pub command_count: i64,
@@ -135,6 +152,8 @@ pub struct Session {
     /// The shell is showing its prompt (OSC 133 prompt seen, no command started since).
     /// Command suggestions only appear here — never inside a running TUI like Claude Code.
     pub at_prompt: bool,
+    /// Warp-style command blocks (lock order: `term` first, then `blocks`).
+    pub blocks: Arc<Mutex<Blocks>>,
 }
 
 impl Session {
@@ -162,13 +181,36 @@ impl Session {
         let _ = self.writer.send(bytes.to_vec());
     }
 
+    /// Metadata for the restore-on-launch snapshot (scrollback travels separately).
+    pub fn snapshot(&self, id: &str, tab_order: i32, is_active: bool) -> SessionSnapshot {
+        SessionSnapshot {
+            session_id: id.to_string(),
+            name: self.name.clone(),
+            project_path: self.cwd.clone(),
+            project_name: self.project.clone(),
+            task_label: self.task_label.clone(),
+            shell: self.shell.clone(),
+            cwd: self.cwd.clone(),
+            tab_order,
+            is_active,
+            updated_at: now_ms(),
+        }
+    }
+
     /// Resize the grid and the PTY together. No-op if the size didn't change.
     pub fn resize(&mut self, size: GridSize) {
         if size == self.size || size.cols < 2 || size.rows < 1 {
             return;
         }
+        let cols_changed = size.cols != self.size.cols;
         self.size = size;
-        self.term.lock().resize(size);
+        {
+            let mut term = self.term.lock();
+            let before = term.grid().history_size();
+            term.resize(size);
+            let after = term.grid().history_size();
+            lock(&self.blocks).on_resize(cols_changed, size.rows, before, after);
+        }
         let _ = self.master.resize(PtySize {
             rows: size.rows as u16,
             cols: size.cols as u16,
@@ -184,6 +226,8 @@ pub struct SessionManager {
     pub sessions: HashMap<SessionId, Session>,
     pub cap: usize,
     pub override_count: u64,
+    /// Mirror of the UI's active tab, so background snapshots know which one to restore.
+    pub active: Option<SessionId>,
     notification_focus: Option<SessionId>,
     muted_waits: Vec<String>,
 }
@@ -195,6 +239,7 @@ impl Default for SessionManager {
             sessions: HashMap::new(),
             cap: 5,
             override_count: 0,
+            active: None,
             notification_focus: None,
             muted_waits: Vec::new(),
         }
@@ -218,7 +263,8 @@ pub enum CreateError {
 
 impl Core {
     /// Spawn a shell on a fresh PTY. Mirrors the Tauri `pty::create_session`.
-    pub fn create_session(&self, cwd: Option<String>, size: GridSize) -> Result<SessionId, CreateError> {
+    /// `restore` replays a previous tab's scrollback and metadata into the new one.
+    pub fn create_session(&self, cwd: Option<String>, size: GridSize, restore: Option<Restore>) -> Result<SessionId, CreateError> {
         {
             let g = lock(&self.mgr);
             if g.sessions.len() >= g.cap {
@@ -284,10 +330,28 @@ impl Core {
         };
         let term: SharedTerm = Arc::new(FairMutex::new(Term::new(config, &size, listener)));
         let exited = Arc::new(AtomicBool::new(false));
+        let blocks = Arc::new(Mutex::new(Blocks::new(size.rows)));
+        let restore = restore.unwrap_or_default();
+
+        // Replay the previous tab's scrollback before the shell prints anything, so
+        // the restored text sits above the new prompt.
+        if let Some(bytes) = &restore.scrollback {
+            let mut t = term.lock();
+            let mut b = lock(&blocks);
+            let mut p: Processor = Processor::new();
+            p.advance(&mut TermHandler::new(&mut t, &mut b), bytes);
+            p.advance(&mut TermHandler::new(&mut t, &mut b), scrollback::DIVIDER);
+        }
 
         // Persist + register BEFORE the reader starts: foreign keys reject state rows
         // written before the session row exists.
-        db::insert_session(&lock(&self.db), &id, None, &shell_path, now_ms(), 1);
+        {
+            let conn = lock(&self.db);
+            db::insert_session(&conn, &id, restore.name.as_deref(), &shell_path, now_ms(), 1);
+            if let Some(l) = &restore.task_label {
+                db::set_task_label(&conn, &id, l);
+            }
+        }
         {
             let mut g = lock(&self.mgr);
             g.order.push(id.clone());
@@ -302,8 +366,11 @@ impl Core {
                     title,
                     size,
                     created_at: now_ms(),
-                    name: None,
+                    name: restore.name,
+                    task_label: restore.task_label,
+                    shell: shell_path.clone(),
                     state: AttentionState::Running,
+                    state_since: now_ms(),
                     project: cwd.as_deref().and_then(project_name),
                     cwd,
                     command_count: 0,
@@ -311,6 +378,7 @@ impl Core {
                     rss_kb: None,
                     last_command: None,
                     at_prompt: false,
+                    blocks: blocks.clone(),
                 },
             );
         }
@@ -322,6 +390,7 @@ impl Core {
             .spawn(move || {
                 let mut buf = [0u8; 16 * 1024];
                 let mut parser: Processor = Processor::new();
+                let mut scanner = MarkerScanner::default();
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
@@ -330,7 +399,22 @@ impl Core {
                             if !evs.is_empty() {
                                 core.process_state_events(evs);
                             }
-                            parser.advance(&mut *term.lock(), &buf[..n]);
+                            // Feed the grid in pieces so each OSC 133 marker is anchored
+                            // with the cursor exactly where the shell had it.
+                            let mut t = term.lock();
+                            let mut b = lock(&blocks);
+                            for (seg, marker) in scanner.split(&buf[..n]) {
+                                if !seg.is_empty() {
+                                    parser.advance(&mut TermHandler::new(&mut t, &mut b), seg);
+                                }
+                                if let Some(m) = marker {
+                                    let alt = t.mode().contains(TermMode::ALT_SCREEN);
+                                    let line = t.grid().cursor.point.line.0;
+                                    b.on_marker(m, line, alt, now_ms());
+                                }
+                            }
+                            drop(b);
+                            drop(t);
                             core.ctx.request_repaint();
                         }
                     }
@@ -384,16 +468,56 @@ impl Core {
         self.ctx.request_repaint();
     }
 
-    /// One detection tick per second drives the prompt-quiet (T_wait) heuristic.
+    /// One detection tick per second drives the prompt-quiet (T_wait) heuristic; every
+    /// 30th tick also snapshots the open tabs for restore-on-launch.
     pub fn spawn_ticker(&self) {
         let core = self.clone();
-        let _ = std::thread::Builder::new().name("ticker".into()).spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(1));
-            let evs = lock(&core.det).tick(Instant::now());
-            if !evs.is_empty() {
-                core.process_state_events(evs);
+        let _ = std::thread::Builder::new().name("ticker".into()).spawn(move || {
+            let mut ticks: u64 = 0;
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let evs = lock(&core.det).tick(Instant::now());
+                if !evs.is_empty() {
+                    core.process_state_events(evs);
+                }
+                ticks += 1;
+                if ticks.is_multiple_of(SNAPSHOT_EVERY_SECS) {
+                    core.save_snapshots();
+                }
             }
         });
+    }
+
+    /// Persist every open tab (metadata + scrollback) so the next launch can restore it.
+    /// Cheap enough for a background thread: one short grid lock per session.
+    pub fn save_snapshots(&self) {
+        let items: Vec<(SessionSnapshot, SharedTerm)> = {
+            let g = lock(&self.mgr);
+            g.order
+                .iter()
+                .enumerate()
+                .filter_map(|(i, id)| g.sessions.get(id).map(|s| (s.snapshot(id, i as i32, g.active.as_ref() == Some(id)), s.term.clone())))
+                .collect()
+        };
+        for (snap, term) in items {
+            let bytes = scrollback::serialize(&term.lock(), scrollback::MAX_LINES);
+            db::save_snapshot(&lock(&self.db), &snap, bytes.as_deref(), now_ms());
+        }
+    }
+
+    /// Snapshot one tab now and mark it closed (so ⌘⇧T can bring it back).
+    pub fn close_snapshot(&self, id: &str) {
+        let item = {
+            let g = lock(&self.mgr);
+            let pos = g.order.iter().position(|x| x == id).unwrap_or(0) as i32;
+            g.sessions.get(id).map(|s| (s.snapshot(id, pos, false), s.term.clone()))
+        };
+        let conn = lock(&self.db);
+        if let Some((snap, term)) = item {
+            let bytes = scrollback::serialize(&term.lock(), scrollback::MAX_LINES);
+            db::save_snapshot(&conn, &snap, bytes.as_deref(), now_ms());
+        }
+        db::close_snapshot(&conn, id, now_ms());
     }
 
     /// Samples per-session memory every 2s with one `ps` call.
@@ -409,8 +533,10 @@ impl Core {
         });
     }
 
-    /// Mark every live session closed (app quit) and stop the shells.
+    /// Snapshot the open tabs for next launch, mark every live session closed (app
+    /// quit) and stop the shells.
     pub fn shutdown(&self) {
+        self.save_snapshots();
         let now = now_ms();
         let mut g = lock(&self.mgr);
         let conn = lock(&self.db);
@@ -424,6 +550,9 @@ impl Core {
 impl SessionManager {
     fn apply_state_event(&mut self, ev: &StateEvent) -> String {
         if let Some(s) = self.sessions.get_mut(&ev.session) {
+            if s.state != ev.state {
+                s.state_since = now_ms();
+            }
             s.state = ev.state;
             if ev.command_started {
                 s.command_count += 1;
@@ -471,7 +600,8 @@ impl SessionManager {
         self.override_count += 1;
     }
 
-    #[allow(dead_code)] // wired up with Focus View
+    /// Mute WAITING notifications for every session except `id` (a focus block).
+    /// Returns the labels muted meanwhile, for a catch-up notification.
     pub fn set_notification_focus(&mut self, id: Option<SessionId>) -> Vec<String> {
         self.notification_focus = id;
         std::mem::take(&mut self.muted_waits)
@@ -597,5 +727,61 @@ mod tests {
     fn names_folders() {
         assert_eq!(project_name("/Users/arun").as_deref(), Some("arun"));
         assert_eq!(project_name("/").as_deref(), Some("/"));
+    }
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::*;
+    use alacritty_terminal::index::{Column, Line};
+
+    fn core() -> Core {
+        Core {
+            mgr: Arc::new(Mutex::new(SessionManager::default())),
+            det: Arc::new(Mutex::new(DetectionEngine::default())),
+            db: db::DbState::memory().expect("memory db").0,
+            ctx: egui::Context::default(),
+        }
+    }
+
+    /// Spawns a real shell: restore replays scrollback above the prompt, snapshots
+    /// round-trip through the DB, and a closed tab stays reopenable.
+    #[test]
+    fn restore_and_snapshot_round_trip() {
+        let core = core();
+        let size = GridSize { cols: 40, rows: 10 };
+        let restore = Restore {
+            name: Some("old tab".into()),
+            task_label: Some("ship v3.1".into()),
+            scrollback: Some(b"restored line one\r\n\x1b[32mgreen\x1b[0m\r\n".to_vec()),
+        };
+        let id = core.create_session(std::env::var("HOME").ok(), size, Some(restore)).expect("spawn shell");
+        {
+            let g = lock(&core.mgr);
+            let s = &g.sessions[&id];
+            assert_eq!(s.name.as_deref(), Some("old tab"));
+            assert_eq!(s.task_label.as_deref(), Some("ship v3.1"));
+            let t = s.term.lock();
+            let row: String = (0..17).map(|c| t.grid()[Line(0)][Column(c)].c).collect();
+            assert_eq!(row, "restored line one");
+            assert_eq!(lock(&s.blocks).scrolled, t.grid().history_size() as i64);
+        }
+        lock(&core.mgr).active = Some(id.clone());
+        core.save_snapshots();
+        let snaps = db::load_snapshots(&lock(&core.db));
+        assert_eq!(snaps.len(), 1);
+        let (snap, bytes) = &snaps[0];
+        assert_eq!(snap.session_id, id);
+        assert!(snap.is_active);
+        assert_eq!(snap.task_label.as_deref(), Some("ship v3.1"));
+        let text = String::from_utf8_lossy(bytes.as_deref().unwrap_or_default()).to_string();
+        assert!(text.contains("restored line one"), "scrollback persisted: {text:?}");
+        assert!(text.contains("restored from previous session"));
+
+        core.close_snapshot(&id);
+        assert!(db::load_snapshots(&lock(&core.db)).is_empty());
+        assert_eq!(db::load_closed_snapshots(&lock(&core.db), 5).len(), 1);
+        lock(&core.mgr).close(&id);
+        core.shutdown();
     }
 }

@@ -9,8 +9,10 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, CornerRadius, Frame, Key, Margin, Modifiers, RichText, Sense, Stroke, Vec2};
 
 use crate::db;
+use crate::focus::{FocusEvent, FocusPanel, SessionInfo};
 use crate::ipc::{AttentionState, SessionId, Summary};
-use crate::session::{self, lock, Core, CreateError, GridSize};
+use crate::perms::{self, PermissionsDialog};
+use crate::session::{self, lock, Core, CreateError, GridSize, Restore};
 use crate::beads::IssuesPanel;
 use crate::git_panel::GitPanel;
 use crate::history::HistoryPanel;
@@ -26,10 +28,14 @@ const KEY_OPEN: &str = "native.sidebar.open";
 const KEY_COLORS: &str = "native.project_colors";
 const KEY_SUGGEST: &str = "native.suggestions";
 const KEY_UPDATE_AUTO: &str = "native.update.auto";
+const KEY_BLOCKS: &str = "native.blocks";
+const KEY_RESTORE: &str = "native.restore_on_launch";
+const KEY_FDA_SEEN: &str = "native.permissions.seen";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
     Dashboard,
+    Focus,
     Tasks,
     Issues,
     Git,
@@ -40,7 +46,7 @@ enum Pane {
 const NEW_PANES: bool = true;
 
 impl Pane {
-    const ALL: [Pane; 5] = [Pane::Dashboard, Pane::Tasks, Pane::Issues, Pane::Git, Pane::History];
+    const ALL: [Pane; 6] = [Pane::Dashboard, Pane::Focus, Pane::Tasks, Pane::Issues, Pane::Git, Pane::History];
 
     fn enabled(self) -> bool {
         NEW_PANES || !matches!(self, Pane::Issues | Pane::Git)
@@ -50,6 +56,7 @@ impl Pane {
     fn id(self) -> &'static str {
         match self {
             Pane::Dashboard => "dashboard",
+            Pane::Focus => "focus",
             Pane::Tasks => "tasks",
             Pane::Issues => "issues",
             Pane::Git => "git",
@@ -64,6 +71,7 @@ impl Pane {
     fn title(self) -> &'static str {
         match self {
             Pane::Dashboard => "Dashboard",
+            Pane::Focus => "Focus",
             Pane::Tasks => "Tasks",
             Pane::Issues => "Issues",
             Pane::Git => "Git",
@@ -108,17 +116,25 @@ pub struct AranApp {
     issues: IssuesPanel,
     git: GitPanel,
     history: HistoryPanel,
+    focus: FocusPanel,
+    perms: PermissionsDialog,
     /// Last active tab per group, so clicking a group returns you to where you were.
     last_in_group: HashMap<String, SessionId>,
     confirm_close_group: Option<(String, Vec<SessionId>)>,
     cap_dialog: Option<usize>,
     renaming: Option<(SessionId, String)>,
+    /// Dashboard: the session whose task label is being edited, with its draft.
+    label_edit: Option<(SessionId, String)>,
     summary: Option<(Instant, Summary)>,
     app_rss_kb: Arc<AtomicI64>,
     /// Hand keyboard focus back to the terminal next frame.
     focus_terminal: bool,
     /// Command autocomplete at the prompt (Settings).
     suggestions_on: bool,
+    /// Warp-style command blocks (Settings).
+    blocks_on: bool,
+    /// Reopen last session's tabs on launch (Settings).
+    restore_on: bool,
     updater: crate::updater::Updater,
     update_auto: bool,
     confirm_update: Option<crate::updater::Release>,
@@ -158,6 +174,7 @@ impl AranApp {
         let issues = IssuesPanel::new(cc.egui_ctx.clone());
         let git = GitPanel::new(cc.egui_ctx.clone());
         let history = HistoryPanel::new(core.db.clone());
+        let focus = FocusPanel::new(core.db.clone());
         let mut app = AranApp {
             core,
             active: None,
@@ -172,25 +189,45 @@ impl AranApp {
             issues,
             git,
             history,
+            focus,
+            perms: PermissionsDialog::new(),
             last_in_group: HashMap::new(),
             confirm_close_group: None,
             cap_dialog: None,
             renaming: None,
+            label_edit: None,
             summary: None,
             app_rss_kb,
             focus_terminal: false,
             suggestions_on: true,
+            blocks_on: true,
+            restore_on: true,
             updater: crate::updater::Updater::new(cc.egui_ctx.clone()),
             update_auto: true,
             confirm_update: None,
             error: None,
         };
-        app.suggestions_on = db::get_setting(&lock(&app.core.db), KEY_SUGGEST).as_deref() != Some("0");
-        app.update_auto = db::get_setting(&lock(&app.core.db), KEY_UPDATE_AUTO).as_deref() != Some("0");
+        {
+            let conn = lock(&app.core.db);
+            app.suggestions_on = db::get_setting(&conn, KEY_SUGGEST).as_deref() != Some("0");
+            app.update_auto = db::get_setting(&conn, KEY_UPDATE_AUTO).as_deref() != Some("0");
+            app.blocks_on = db::get_setting(&conn, KEY_BLOCKS).as_deref() != Some("0");
+            app.restore_on = db::get_setting(&conn, KEY_RESTORE).as_deref() != Some("0");
+            // First launch without Full Disk Access: offer the onboarding once.
+            if perms::SUPPORTED && !app.perms.has_fda() && db::get_setting(&conn, KEY_FDA_SEEN).as_deref() != Some("1") {
+                app.perms.open = true;
+            }
+        }
         if app.update_auto {
             app.updater.start_background_checks();
         }
-        app.new_tab(None);
+        // A focus block that survived a relaunch keeps muting other sessions.
+        if let Some(b) = app.focus.active().filter(|b| b.kind == "focus") {
+            lock(&app.core.mgr).set_notification_focus(b.session_id.clone());
+        }
+        if !app.restore_tabs() {
+            app.new_tab(None);
+        }
         app
     }
 
@@ -202,11 +239,99 @@ impl AranApp {
 
     /// Open a terminal in `cwd` (None = home folder, a fresh group).
     fn new_tab(&mut self, cwd: Option<String>) {
-        match self.core.create_session(cwd, self.last_grid) {
+        match self.core.create_session(cwd, self.last_grid, None) {
             Ok(id) => self.active = Some(id),
             Err(CreateError::CapReached { limit }) => self.cap_dialog = Some(limit),
             Err(CreateError::Spawn(e)) => self.error = Some(format!("Could not start shell: {e}")),
         }
+    }
+
+    /// Bring back last launch's tabs (with scrollback). Returns false when there was
+    /// nothing to restore (or the setting is off), so the caller opens a fresh tab.
+    fn restore_tabs(&mut self) -> bool {
+        if !self.restore_on {
+            return false;
+        }
+        let snaps = db::load_snapshots(&lock(&self.core.db));
+        if snaps.is_empty() {
+            return false;
+        }
+        let mut active = None;
+        let mut opened = 0;
+        for (snap, scrollback) in snaps {
+            // Consumed either way: restored tabs get fresh ids and fresh snapshots.
+            db::delete_snapshot(&lock(&self.core.db), &snap.session_id);
+            let restore = Restore { name: snap.name.clone(), task_label: snap.task_label.clone(), scrollback };
+            match self.core.create_session(snap.cwd.clone(), self.last_grid, Some(restore)) {
+                Ok(id) => {
+                    opened += 1;
+                    if snap.is_active || active.is_none() {
+                        active = Some(id);
+                    }
+                }
+                Err(CreateError::CapReached { .. }) => break,
+                Err(CreateError::Spawn(e)) => self.error = Some(format!("Could not restore a tab: {e}")),
+            }
+        }
+        self.active = active;
+        opened > 0
+    }
+
+    /// ⌘⇧T: reopen the most recently closed tab, scrollback included.
+    fn reopen_closed(&mut self) {
+        let Some((snap, scrollback)) = db::load_closed_snapshots(&lock(&self.core.db), 1).into_iter().next() else { return };
+        db::delete_snapshot(&lock(&self.core.db), &snap.session_id);
+        let restore = Restore { name: snap.name.clone(), task_label: snap.task_label.clone(), scrollback };
+        match self.core.create_session(snap.cwd.clone(), self.last_grid, Some(restore)) {
+            Ok(id) => self.active = Some(id),
+            Err(CreateError::CapReached { limit }) => self.cap_dialog = Some(limit),
+            Err(CreateError::Spawn(e)) => self.error = Some(format!("Could not start shell: {e}")),
+        }
+    }
+
+    /// Set (or clear, when empty) a session's task label.
+    fn set_task_label(&mut self, id: &str, label: &str) {
+        let label = label.trim();
+        if let Some(s) = lock(&self.core.mgr).sessions.get_mut(id) {
+            s.task_label = (!label.is_empty()).then(|| label.to_string());
+        }
+        db::set_task_label(&lock(&self.core.db), id, label);
+    }
+
+    /// Apply a focus event: a focus block mutes WAITING notifications for the other
+    /// sessions; ending it restores them and surfaces whatever waited meanwhile.
+    fn apply_focus_events(&mut self, events: Vec<FocusEvent>) {
+        for ev in events {
+            let drained = match ev {
+                FocusEvent::Started { session } => lock(&self.core.mgr).set_notification_focus(session),
+                FocusEvent::Ended => lock(&self.core.mgr).set_notification_focus(None),
+            };
+            if !drained.is_empty() {
+                let body = if drained.len() == 1 {
+                    format!("{} was waiting while you focused", drained[0])
+                } else {
+                    format!("{} sessions were waiting while you focused", drained.len())
+                };
+                crate::notify::notify("Aran Terminal", &body);
+            }
+        }
+    }
+
+    fn session_infos(&self) -> Vec<SessionInfo> {
+        let g = lock(&self.core.mgr);
+        g.order
+            .iter()
+            .filter_map(|id| g.sessions.get(id).map(|s| (id, s)))
+            .map(|(id, s)| SessionInfo {
+                id: id.clone(),
+                label: s.label(),
+                project: s.project.clone(),
+                task_label: s.task_label.clone(),
+                state: s.state,
+                created_at: s.created_at,
+                state_since: s.state_since,
+            })
+            .collect()
     }
 
     fn active_cwd(&self) -> Option<String> {
@@ -233,6 +358,8 @@ impl AranApp {
         // Pick the neighbour in the visible (grouped) order before removing.
         let order = self.flat_order();
         let pos = order.iter().position(|x| x == id);
+        // Snapshot first so ⌘⇧T can bring the tab back with its scrollback.
+        self.core.close_snapshot(id);
         {
             let mut g = lock(&self.core.mgr);
             g.close(id);
@@ -291,12 +418,18 @@ impl AranApp {
         let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
         let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
 
+        if consume(shift_cmd, Key::T) {
+            self.reopen_closed();
+        }
         if consume(cmd, Key::T) {
             let cwd = self.active_cwd();
             self.new_tab(cwd);
         }
         if consume(cmd, Key::N) {
             self.new_tab(None);
+        }
+        if consume(shift_cmd, Key::F) {
+            self.toggle_pane(Pane::Focus);
         }
         if consume(cmd, Key::W) {
             if let Some(id) = self.active.clone() {
@@ -597,6 +730,14 @@ impl AranApp {
         if ui.add(egui::Button::selectable(tasks_on, RichText::new(tasks_label).size(12.0))).on_hover_text("To-do list  ⌘J").clicked() {
             self.toggle_pane(Pane::Tasks);
         }
+        let focus_on = self.show_sidebar && self.pane == Pane::Focus;
+        if self.focus.active().is_some() {
+            if self.focus.pill(ui, session::now_ms()) {
+                self.toggle_pane(Pane::Focus);
+            }
+        } else if ui.add(egui::Button::selectable(focus_on, RichText::new("Focus").size(12.0))).on_hover_text("Deep-work timer  ⌘⇧F").clicked() {
+            self.toggle_pane(Pane::Focus);
+        }
         let dash_on = self.show_sidebar && self.pane == Pane::Dashboard;
         if ui.add(egui::Button::selectable(dash_on, RichText::new("Dashboard").size(12.0))).on_hover_text("Focus dashboard  ⌘B").clicked() {
             self.toggle_pane(Pane::Dashboard);
@@ -668,6 +809,14 @@ impl AranApp {
         ui.separator();
         match self.pane {
             Pane::Dashboard => self.dashboard(ui),
+            Pane::Focus => {
+                let infos = self.session_infos();
+                let (activate, events) = self.focus.show(ui, &infos, self.active.as_ref(), session::now_ms());
+                if let Some(id) = activate {
+                    self.active = Some(id);
+                }
+                self.apply_focus_events(events);
+            }
             Pane::Tasks => {
                 let project = self.active_project();
                 self.tasks.show(ui, project);
@@ -696,6 +845,7 @@ impl AranApp {
             label: String,
             project: Option<String>,
             cwd: Option<String>,
+            task_label: Option<String>,
             state: AttentionState,
             uptime_ms: i64,
             cmds: i64,
@@ -711,6 +861,7 @@ impl AranApp {
                     label: s.label(),
                     project: s.project.clone(),
                     cwd: s.cwd.clone(),
+                    task_label: s.task_label.clone(),
                     state: s.state,
                     uptime_ms: now - s.created_at,
                     cmds: s.command_count,
@@ -719,6 +870,9 @@ impl AranApp {
                 .collect()
         };
         let mut activate = None;
+        let mut label_commit: Option<(SessionId, String)> = None;
+        let mut label_start: Option<(SessionId, String)> = None;
+        let mut label_cancel = false;
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             section(ui, "NEEDS YOU");
@@ -790,6 +944,30 @@ impl AranApp {
                                     .color(th.muted)
                                     .size(11.0),
                             );
+                            // Task label: click to edit, Enter saves, Esc cancels.
+                            if let Some((_, draft)) = self.label_edit.as_mut().filter(|(eid, _)| *eid == r.id) {
+                                let te = ui.add(
+                                    egui::TextEdit::singleline(draft)
+                                        .hint_text("What are you doing here?")
+                                        .desired_width(ui.available_width())
+                                        .font(egui::TextStyle::Small),
+                                );
+                                te.request_focus();
+                                if ui.input(|i| i.key_pressed(Key::Escape)) {
+                                    label_cancel = true;
+                                } else if te.lost_focus() {
+                                    label_commit = Some((r.id.clone(), draft.clone()));
+                                }
+                            } else {
+                                let (text, color) = match &r.task_label {
+                                    Some(t) => (format!("🏷 {t}"), th.text),
+                                    None => ("+ label".to_string(), th.muted.gamma_multiply(0.8)),
+                                };
+                                let b = ui.add(egui::Button::new(RichText::new(text).size(11.0).color(color)).frame(false)).on_hover_text("Task label for this session");
+                                if b.clicked() {
+                                    label_start = Some((r.id.clone(), r.task_label.clone().unwrap_or_default()));
+                                }
+                            }
                         })
                         .response
                         .interact(Sense::click());
@@ -826,6 +1004,29 @@ impl AranApp {
                     {
                         db::set_setting(&lock(&self.core.db), KEY_SUGGEST, if self.suggestions_on { "1" } else { "0" });
                     }
+                    if ui
+                        .checkbox(&mut self.blocks_on, "Command blocks")
+                        .on_hover_text("Warp-style blocks: a status gutter per command, hover for copy / re-run, ⌘↑ ⌘↓ to jump")
+                        .changed()
+                    {
+                        db::set_setting(&lock(&self.core.db), KEY_BLOCKS, if self.blocks_on { "1" } else { "0" });
+                    }
+                    if ui
+                        .checkbox(&mut self.restore_on, "Restore tabs on launch")
+                        .on_hover_text("Reopen last session's tabs, scrollback included. ⌘⇧T reopens a closed tab.")
+                        .changed()
+                    {
+                        db::set_setting(&lock(&self.core.db), KEY_RESTORE, if self.restore_on { "1" } else { "0" });
+                    }
+                    if perms::SUPPORTED {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("File access…").on_hover_text("Full Disk Access / folder permissions for the terminals").clicked() {
+                                self.perms.open = true;
+                            }
+                            let (t, c) = if self.perms.has_fda() { ("✓ Full Disk Access", th.running) } else { ("no Full Disk Access", th.muted) };
+                            ui.label(RichText::new(t).size(11.0).color(c));
+                        });
+                    }
                     ui.horizontal(|ui| {
                         if ui.checkbox(&mut self.update_auto, "Check for updates").changed() {
                             db::set_setting(&lock(&self.core.db), KEY_UPDATE_AUTO, if self.update_auto { "1" } else { "0" });
@@ -854,6 +1055,16 @@ impl AranApp {
 
         if let Some(id) = activate {
             self.active = Some(id);
+        }
+        if let Some(start) = label_start {
+            self.label_edit = Some(start);
+        }
+        if label_cancel {
+            self.label_edit = None;
+        }
+        if let Some((id, text)) = label_commit {
+            self.label_edit = None;
+            self.set_task_label(&id, &text);
         }
     }
 
@@ -885,7 +1096,7 @@ impl AranApp {
                 if kb > 0 {
                     ui.label(small(format!("app {}", fmt_kb(kb)), th.muted));
                 }
-                ui.label(small("⌘T tab  ⌘N new folder  ⌘B dashboard  ⌘J tasks  ⌘Y history".into(), th.muted));
+                ui.label(small("⌘T tab  ⌘⇧T reopen  ⌘N new folder  ⌘B dashboard  ⌘⇧F focus  ⌘J tasks  ⌘Y history".into(), th.muted));
             });
         });
     }
@@ -902,6 +1113,7 @@ impl eframe::App for AranApp {
         let dead = lock(&self.core.mgr).reap_exited();
         for id in &dead {
             self.views.remove(id);
+            db::close_snapshot(&lock(&self.core.db), id, session::now_ms());
         }
         if self.active.as_ref().is_some_and(|a| dead.contains(a)) || self.active.is_none() {
             self.active = self.flat_order().last().cloned();
@@ -913,6 +1125,17 @@ impl eframe::App for AranApp {
 
         self.shortcuts(&ctx);
         let th = theme::t();
+        lock(&self.core.mgr).active = self.active.clone();
+
+        // Focus timer: complete / abandon blocks, keep the clock ticking.
+        {
+            let infos = self.session_infos();
+            let events = self.focus.tick(session::now_ms(), &infos);
+            self.apply_focus_events(events);
+            if self.focus.active().is_some() {
+                ctx.request_repaint_after(Duration::from_secs(1));
+            }
+        }
 
         egui::Panel::top("tabs")
             .frame(Frame::new().fill(th.panel).inner_margin(Margin::symmetric(8, 6)))
@@ -961,9 +1184,25 @@ impl eframe::App for AranApp {
                 db::command_suggestions(&lock(&db), prefix, cwd, crate::suggest::MAX_SUGGESTIONS)
             };
             let suggest: Option<term_view::SuggestFn<'_>> = self.suggestions_on.then_some(&lookup);
-            term_view::show(ui, s, view, metrics, suggest, std::mem::take(&mut self.focus_terminal));
+            term_view::show(ui, s, view, metrics, suggest, self.blocks_on, std::mem::take(&mut self.focus_terminal));
             self.last_grid = s.size;
         });
+
+        let events = self.focus.break_prompt(&ctx);
+        self.apply_focus_events(events);
+
+        if self.perms.show(&ctx) {
+            self.setting(KEY_FDA_SEEN, "1");
+        }
+        if self.perms.relaunch {
+            self.perms.relaunch = false;
+            if let Some(app) = perms::app_bundle() {
+                crate::updater::relaunch(&app);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.error = Some("Relaunch needs the app bundle — quit and reopen Aran Terminal.".into());
+            }
+        }
 
         if let Some((name, ids)) = self.confirm_close_group.clone() {
             egui::Window::new("Close group?")

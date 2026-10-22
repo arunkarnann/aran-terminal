@@ -180,7 +180,7 @@
           session and floats the one that's <strong>waiting on you</strong> to the top.
         </p>
         <div class="cta">
-          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg">Download .dmg — Apple Silicon</a>
+          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.1.0_universal.dmg">Download .dmg — Apple Silicon + Intel</a>
           <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal">View on GitHub →</a>
         </div>
 
@@ -226,7 +226,7 @@
 
         <h3 style="margin-top:1.5rem; font-size:1.1rem; color:var(--text);">macOS</h3>
         <div class="cta">
-          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_1.1.0_aarch64.dmg">Download .dmg — Apple Silicon</a>
+          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.1.0_universal.dmg">Download .dmg — Apple Silicon + Intel</a>
           <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases">All releases →</a>
         </div>
         <p class="note">
@@ -238,29 +238,29 @@
 
         <h3 style="margin-top:2.5rem; font-size:1.1rem; color:var(--text);">Linux</h3>
         <div class="cta" style="margin-bottom:1rem;">
-          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.deb">Download .deb — Debian / Ubuntu</a>
-          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal_2.3.1_amd64.AppImage">Download .AppImage — Any distro</a>
+          <a class="btn btn--primary" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/aran-terminal_3.1.0_amd64.deb">Download .deb — Debian / Ubuntu</a>
+          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.1.0_x86_64.AppImage">Download .AppImage — Any distro</a>
         </div>
         <div class="cta">
-          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran.Terminal-2.3.1-1.x86_64.rpm">Download .rpm — Fedora / RHEL</a>
+          <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases/latest/download/aran-terminal-3.1.0-1.x86_64.rpm">Download .rpm — Fedora / RHEL</a>
           <a class="btn btn--ghost" href="https://github.com/arunkarnann/aran-terminal/releases">All Linux releases →</a>
         </div>
 
         <pre style="margin-top:1.5rem;"><span class="c"># Debian / Ubuntu (.deb)</span>
-sudo dpkg -i Aran.Terminal_2.3.1_amd64.deb
+sudo dpkg -i aran-terminal_3.1.0_amd64.deb
 sudo apt-get install -f   <span class="c"># fix any missing deps</span>
 
 <span class="c"># Fedora / RHEL (.rpm)</span>
-sudo rpm -i Aran.Terminal-2.3.1-1.x86_64.rpm
+sudo rpm -i aran-terminal-3.1.0-1.x86_64.rpm
 
 <span class="c"># Any distro (.AppImage)</span>
-chmod +x Aran.Terminal_2.3.1_amd64.AppImage
-./Aran.Terminal_2.3.1_amd64.AppImage</pre>
+chmod +x Aran-Terminal_3.1.0_x86_64.AppImage
+./Aran-Terminal_3.1.0_x86_64.AppImage</pre>
         <p class="note">
-          On Ubuntu/Debian you also need the WebKit and GTK runtime libraries. If the <code>.deb</code>
-          install reports missing dependencies, run <code>sudo apt-get install -f</code> to pull them
-          automatically. For other distros, make sure <code>libwebkit2gtk-4.1</code>, <code>libgtk-3</code>,
-          and <code>libayatana-appindicator3</code> are installed.
+          Since v3 the app is pure Rust (no WebKit or GTK). The <code>.deb</code> and <code>.rpm</code>
+          declare their runtime dependencies (OpenGL, X11/Wayland, libxkbcommon); on Debian/Ubuntu
+          <code>sudo apt-get install -f</code> pulls in anything missing. The <code>.AppImage</code>
+          and <code>.tar.gz</code> need no install at all.
         </p>
       </div>
     </section>

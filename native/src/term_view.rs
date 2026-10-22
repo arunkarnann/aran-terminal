@@ -9,7 +9,8 @@ use alacritty_terminal::term::{point_to_viewport, viewport_to_point, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2};
 
-use crate::session::{GridSize, Session, SharedTerm};
+use crate::blocks::{self, Status};
+use crate::session::{lock, GridSize, Session, SharedTerm};
 use crate::suggest::{Anchor, KeyAction, Suggest};
 use crate::theme;
 
@@ -30,7 +31,41 @@ pub struct TermViewState {
     last_motion_cell: Option<(usize, usize)>,
     /// The ghost text was drawn last frame (→ only accepts what the user can see).
     ghost_shown: bool,
+    /// Command blocks: the block whose gutter/toolbar the pointer is on, the selected
+    /// one (click the gutter), and a "✓ copied" flash (block, what, when).
+    hover_block: Option<u64>,
+    selected_block: Option<u64>,
+    copied: Option<(u64, CopyKind, std::time::Instant)>,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CopyKind {
+    Cmd,
+    Out,
+    All,
+}
+
+/// One block's visible slice, in viewport rows.
+struct BlockRect {
+    id: u64,
+    status: Status,
+    command: Option<String>,
+    top: usize,
+    rows: usize,
+    /// The slice begins at the block's prompt line (draw the separator).
+    starts_here: bool,
+}
+
+/// The block you're scrolled inside of, whose command line is above the viewport.
+struct Sticky {
+    id: u64,
+    command: String,
+    status: Status,
+    prompt_abs: i64,
+}
+
+/// Gutter bar width inside the left padding.
+const GUTTER_W: f32 = 3.0;
 
 pub struct CellMetrics {
     pub font: FontId,
@@ -54,13 +89,15 @@ impl CellMetrics {
 }
 
 /// Draw the session and handle its input. Returns true if the user typed into it.
-/// `suggest` = command autocomplete source (None = turned off).
+/// `suggest` = command autocomplete source (None = turned off); `blocks_on` draws
+/// the Warp-style command blocks.
 pub fn show(
     ui: &mut egui::Ui,
     session: &mut Session,
     st: &mut TermViewState,
     m: &CellMetrics,
     suggest: Option<SuggestFn<'_>>,
+    blocks_on: bool,
     grab_focus: bool,
 ) -> bool {
     let avail = ui.available_rect_before_wrap();
@@ -91,7 +128,15 @@ pub fn show(
         st.suggest.reset();
     }
 
-    let typed = if focused { handle_keys(ui, session, st, suggesting) } else { false };
+    let mut typed = if focused { handle_keys(ui, session, st, suggesting, blocks_on) } else { false };
+    // Files dragged from Finder: paste their paths, Terminal.app-style. Handled even
+    // when the terminal isn't focused (the drop itself says where the user wants them).
+    if let Some(text) = dropped_paths(ui) {
+        st.suggest.reset();
+        paste(session, &text);
+        resp.request_focus();
+        typed = true;
+    }
     handle_mouse(ui, &resp, session, st, m, inner);
 
     let mut ghost = None;
@@ -104,13 +149,261 @@ pub fn show(
         ghost = st.suggest.ghost().filter(|g| room_for_ghost(&session.term, g)).map(str::to_string);
     }
     st.ghost_shown = ghost.is_some();
-    let cursor_rect = paint(ui, session, m, inner, avail, focused, ghost.as_deref());
+    let (rects, sticky) = if blocks_on { block_layout(session) } else { (Vec::new(), None) };
+    if !blocks_on {
+        st.hover_block = None;
+        st.selected_block = None;
+    }
+    let highlight = rects
+        .iter()
+        .filter(|r| Some(r.id) == st.selected_block || Some(r.id) == st.hover_block)
+        .map(|r| (r.top, r.rows, Some(r.id) == st.selected_block))
+        .collect::<Vec<_>>();
+    let cursor_rect = paint(ui, session, m, inner, avail, focused, ghost.as_deref(), &highlight);
+    if blocks_on {
+        blocks_overlay(ui, id, session, st, m, inner, avail, &rects, sticky.as_ref());
+    }
+    draw_drop_hint(ui, avail);
     if focused && st.suggest.panel_open() {
         if let Some(rect) = cursor_rect {
             suggestion_list(ui, id, session, st, m, rect, avail);
         }
     }
     typed
+}
+
+// ---------------- command blocks ----------------
+
+/// Where each block falls in the viewport this frame, plus the sticky header candidate.
+fn block_layout(session: &Session) -> (Vec<BlockRect>, Option<Sticky>) {
+    let term = session.term.lock();
+    if term.mode().contains(TermMode::ALT_SCREEN) {
+        return (Vec::new(), None);
+    }
+    let grid = term.grid();
+    let offset = grid.display_offset();
+    let rows = grid.screen_lines() as i64;
+    let mut b = lock(&session.blocks);
+    b.prune(grid.history_size());
+    let vt = b.top_abs(offset);
+    let vb = vt + rows - 1;
+    let last = b.scrolled + rows - 1;
+    let mut out = Vec::new();
+    let mut sticky = None;
+    let list: Vec<&blocks::Block> = b.list.iter().collect();
+    for (i, blk) in list.iter().enumerate() {
+        let top = blk.prompt;
+        let bottom = list.get(i + 1).map(|n| n.prompt - 1).unwrap_or(last);
+        if bottom < top {
+            continue;
+        }
+        if top < vt && bottom >= vt {
+            if let Some(c) = &blk.command {
+                sticky = Some(Sticky { id: blk.id, command: c.clone(), status: blk.status, prompt_abs: top });
+            }
+        }
+        let vis_top = top.max(vt);
+        let vis_bottom = bottom.min(vb);
+        if vis_bottom < vis_top {
+            continue;
+        }
+        out.push(BlockRect {
+            id: blk.id,
+            status: blk.status,
+            command: blk.command.clone(),
+            top: (vis_top - vt) as usize,
+            rows: (vis_bottom - vis_top + 1) as usize,
+            starts_here: vis_top == top,
+        });
+    }
+    (out, sticky)
+}
+
+fn status_color(s: Status) -> Color32 {
+    let th = theme::t();
+    match s {
+        Status::Active => th.muted.gamma_multiply(0.6),
+        Status::Running => th.primary,
+        Status::Success => th.running,
+        Status::Error => th.error,
+        Status::Aborted => th.waiting,
+    }
+}
+
+/// Scroll so absolute line `abs` sits at the top of the viewport.
+fn scroll_to_abs(session: &Session, abs: i64) {
+    let mut term = session.term.lock();
+    let offset = term.grid().display_offset() as i64;
+    let hist = term.grid().history_size() as i64;
+    let target = (lock(&session.blocks).scrolled - abs).clamp(0, hist);
+    term.scroll_display(Scroll::Delta((target - offset) as i32));
+}
+
+/// ⌘↑ / ⌘↓: jump to the previous / next block's prompt.
+fn jump_block(session: &Session, st: &mut TermViewState, up: bool) {
+    let found = {
+        let term = session.term.lock();
+        let b = lock(&session.blocks);
+        let vt = b.top_abs(term.grid().display_offset());
+        let f = if up { b.list.iter().rev().find(|x| x.prompt < vt) } else { b.list.iter().find(|x| x.prompt > vt) };
+        f.map(|x| (x.prompt, x.id))
+    };
+    if let Some((abs, id)) = found {
+        scroll_to_abs(session, abs);
+        st.selected_block = Some(id);
+    }
+}
+
+fn block_text(session: &Session, id: u64, kind: CopyKind) -> Option<String> {
+    let term = session.term.lock();
+    let b = lock(&session.blocks);
+    let blk = b.list.iter().find(|x| x.id == id)?;
+    Some(match kind {
+        CopyKind::Cmd => blk.command.clone().unwrap_or_default(),
+        CopyKind::Out => blocks::output_text(&term, &b, blk),
+        CopyKind::All => blocks::full_text(&term, &b, blk),
+    })
+}
+
+/// Separators, gutter bars, the hover toolbar and the sticky command header.
+#[allow(clippy::too_many_arguments)]
+fn blocks_overlay(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    session: &Session,
+    st: &mut TermViewState,
+    m: &CellMetrics,
+    inner: Rect,
+    outer: Rect,
+    rects: &[BlockRect],
+    sticky: Option<&Sticky>,
+) {
+    let th = theme::t();
+    let painter = ui.painter_at(outer);
+    let mut hover_now: Option<u64> = None;
+    let mut toggle: Option<u64> = None;
+    for r in rects {
+        let y0 = inner.min.y + r.top as f32 * m.h;
+        let y1 = y0 + r.rows as f32 * m.h;
+        if r.starts_here && r.top > 0 {
+            painter.line_segment([Pos2::new(inner.min.x, y0 - 0.5), Pos2::new(inner.max.x, y0 - 0.5)], Stroke::new(1.0, th.border.gamma_multiply(0.45)));
+        }
+        let bar = Rect::from_min_max(Pos2::new(outer.min.x + 1.0, y0 + 1.0), Pos2::new(outer.min.x + 1.0 + GUTTER_W, y1 - 1.0));
+        let selected = st.selected_block == Some(r.id);
+        let hit = ui.interact(bar.expand2(Vec2::new(3.0, 0.0)), id.with(("blk", r.id)), Sense::click());
+        let hovered = hit.hovered();
+        if hovered {
+            hover_now = Some(r.id);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if hit.clicked() {
+            toggle = Some(r.id);
+        }
+        let mut color = status_color(r.status);
+        if !(hovered || selected || st.hover_block == Some(r.id)) {
+            color = color.gamma_multiply(0.7);
+        }
+        painter.rect_filled(bar, CornerRadius::same(1), color);
+        let tip = match &r.command {
+            Some(c) => format!("{c} · {}", r.status.label()),
+            None => r.status.label().to_string(),
+        };
+        hit.on_hover_text(tip);
+    }
+    if let Some(t) = toggle {
+        st.selected_block = if st.selected_block == Some(t) { None } else { Some(t) };
+    }
+
+    // Hover toolbar, anchored top-right of the block. It stays while the pointer is on it.
+    let shown = st.hover_block.filter(|h| rects.iter().any(|r| r.id == *h));
+    if let Some(hid) = shown {
+        let r = rects.iter().find(|r| r.id == hid);
+        if let Some(r) = r {
+            let y = inner.min.y + r.top as f32 * m.h;
+            let x = (inner.max.x - 330.0).max(inner.min.x);
+            let mut hovered_bar = false;
+            let mut action: Option<(CopyKind, bool)> = None; // (kind, rerun)
+            let resp = egui::Area::new(id.with(("blk-tools", hid)))
+                .order(egui::Order::Foreground)
+                .fixed_pos(Pos2::new(x, y))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::new()
+                        .fill(th.panel)
+                        .stroke(Stroke::new(1.0, th.border))
+                        .corner_radius(CornerRadius::same(5))
+                        .inner_margin(egui::Margin::symmetric(6, 3))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                                ui.painter().circle_filled(dot.center(), 4.0, status_color(r.status));
+                                let flash = |k: CopyKind| st.copied.as_ref().is_some_and(|(b, kk, at)| *b == hid && *kk == k && at.elapsed() < std::time::Duration::from_millis(1100));
+                                let btn = |ui: &mut egui::Ui, text: &str, enabled: bool| {
+                                    ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).size(11.0)).small()).clicked()
+                                };
+                                let has_cmd = r.command.is_some();
+                                if btn(ui, if flash(CopyKind::Cmd) { "✓ cmd" } else { "copy cmd" }, has_cmd) {
+                                    action = Some((CopyKind::Cmd, false));
+                                }
+                                if btn(ui, if flash(CopyKind::Out) { "✓ out" } else { "copy output" }, true) {
+                                    action = Some((CopyKind::Out, false));
+                                }
+                                if btn(ui, if flash(CopyKind::All) { "✓ all" } else { "copy all" }, true) {
+                                    action = Some((CopyKind::All, false));
+                                }
+                                let rerun = egui::Button::new(egui::RichText::new("re-run").size(11.0).color(theme::ink_on(th.primary))).fill(th.primary).small();
+                                if ui.add_enabled(has_cmd, rerun).clicked() {
+                                    action = Some((CopyKind::Cmd, true));
+                                }
+                            });
+                        });
+                })
+                .response;
+            if resp.contains_pointer() {
+                hovered_bar = true;
+            }
+            if let Some((kind, rerun)) = action {
+                if let Some(text) = block_text(session, hid, kind) {
+                    if rerun {
+                        let cmd = text.trim().to_string();
+                        if !cmd.is_empty() {
+                            session.write(format!("{cmd}\r").as_bytes());
+                        }
+                    } else {
+                        ui.ctx().copy_text(text);
+                        st.copied = Some((hid, kind, std::time::Instant::now()));
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(1150));
+                    }
+                }
+            }
+            if hovered_bar && hover_now.is_none() {
+                hover_now = Some(hid);
+            }
+        }
+    }
+    st.hover_block = hover_now;
+
+    // Sticky header: the command you're scrolled inside of.
+    if let Some(s) = sticky {
+        let h = m.h + 6.0;
+        let rect = Rect::from_min_size(Pos2::new(inner.min.x, outer.min.y), Vec2::new(inner.width(), h));
+        painter.rect_filled(rect, CornerRadius::same(4), th.panel.gamma_multiply(0.97));
+        painter.line_segment([Pos2::new(rect.min.x, rect.max.y), Pos2::new(rect.max.x, rect.max.y)], Stroke::new(1.0, th.border));
+        painter.rect_filled(Rect::from_min_size(Pos2::new(outer.min.x + 1.0, rect.min.y + 1.0), Vec2::new(GUTTER_W, h - 2.0)), CornerRadius::same(1), status_color(s.status));
+        let font = FontId::proportional(11.5);
+        let status = painter.layout_no_wrap(s.status.label().to_string(), font.clone(), th.muted);
+        painter.galley(Pos2::new(rect.max.x - 8.0 - status.size().x, rect.center().y - status.size().y / 2.0), status, th.muted);
+        let cmd = painter.layout_no_wrap(s.command.clone(), m.font.clone(), th.text);
+        painter.with_clip_rect(Rect::from_min_max(rect.min, Pos2::new(rect.max.x - 70.0, rect.max.y))).galley(Pos2::new(rect.min.x + 8.0, rect.center().y - cmd.size().y / 2.0), cmd, th.text);
+        let hit = ui.interact(rect, id.with(("blk-sticky", s.id)), Sense::click()).on_hover_text("Jump to command");
+        if hit.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if hit.clicked() {
+            scroll_to_abs(session, s.prompt_abs);
+            st.selected_block = Some(s.id);
+        }
+    }
 }
 
 /// Cursor position in scrollback-independent coordinates.
@@ -228,10 +521,28 @@ fn resolve(color: Color, colors: &alacritty_terminal::term::color::Colors, bold:
 }
 
 /// Paint the grid. Returns the cursor cell's rect when it's on screen.
-fn paint(ui: &egui::Ui, session: &Session, m: &CellMetrics, inner: Rect, outer: Rect, focused: bool, ghost: Option<&str>) -> Option<Rect> {
+/// `highlight` = block slices (top row, rows, selected) tinted under the text.
+#[allow(clippy::too_many_arguments)]
+fn paint(
+    ui: &egui::Ui,
+    session: &Session,
+    m: &CellMetrics,
+    inner: Rect,
+    outer: Rect,
+    focused: bool,
+    ghost: Option<&str>,
+    highlight: &[(usize, usize, bool)],
+) -> Option<Rect> {
     let mut cursor_rect = None;
     let painter = ui.painter_at(outer);
     painter.rect_filled(outer, CornerRadius::ZERO, theme::t().bg);
+    for (top, rows, selected) in highlight {
+        let y = inner.min.y + *top as f32 * m.h;
+        let rect = Rect::from_min_size(Pos2::new(outer.min.x, y), Vec2::new(outer.width(), *rows as f32 * m.h));
+        let th = theme::t();
+        let tint = if *selected { th.selection.gamma_multiply(0.45) } else { th.border.gamma_multiply(0.22) };
+        painter.rect_filled(rect, CornerRadius::ZERO, tint);
+    }
 
     let term = session.term.lock();
     let content = term.renderable_content();
@@ -689,7 +1000,7 @@ fn key_bytes(key: Key, m: Modifiers, app_cursor: bool) -> Option<Vec<u8>> {
     })
 }
 
-fn handle_keys(ui: &egui::Ui, session: &Session, st: &mut TermViewState, suggesting: bool) -> bool {
+fn handle_keys(ui: &egui::Ui, session: &Session, st: &mut TermViewState, suggesting: bool, blocks_on: bool) -> bool {
     let events = ui.input(|i| i.events.clone());
     let app_cursor = session.term.lock().mode().contains(TermMode::APP_CURSOR);
     let mut typed = false;
@@ -706,6 +1017,10 @@ fn handle_keys(ui: &egui::Ui, session: &Session, st: &mut TermViewState, suggest
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 // Cmd-shortcuts belong to the app (tabs, copy/paste), not the shell.
                 if modifiers.command && !modifiers.ctrl {
+                    // ⌘↑ / ⌘↓ walk the command blocks.
+                    if blocks_on && !modifiers.shift && matches!(key, Key::ArrowUp | Key::ArrowDown) {
+                        jump_block(session, st, key == Key::ArrowUp);
+                    }
                     continue;
                 }
                 // → only takes a suggestion the user can actually see.
@@ -757,6 +1072,41 @@ fn handle_keys(ui: &egui::Ui, session: &Session, st: &mut TermViewState, suggest
     typed
 }
 
+/// Paths of files dropped onto the window this frame, shell-escaped and space-separated
+/// with a trailing space (what Terminal.app / iTerm2 type, so Claude Code and other
+/// TUIs recognise them — e.g. a dropped image becomes an attachment).
+fn dropped_paths(ui: &egui::Ui) -> Option<String> {
+    let paths: Vec<String> = ui.input(|i| {
+        i.raw.dropped_files.iter().map(|f| shell_escape(&f.path().to_string_lossy())).collect()
+    });
+    if paths.is_empty() {
+        return None;
+    }
+    Some(format!("{} ", paths.join(" ")))
+}
+
+/// Backslash-escape shell metacharacters (spaces, quotes, parens …) the way macOS
+/// terminals do for dropped files.
+fn shell_escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c.is_whitespace() || "\\'\"`$&|;<>()[]{}*?!#~^".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Outline the terminal while files are dragged over the window.
+fn draw_drop_hint(ui: &egui::Ui, rect: Rect) {
+    if ui.input(|i| i.raw.hovered_files.is_empty()) {
+        return;
+    }
+    let th = theme::t();
+    ui.painter().rect_stroke(rect.shrink(2.0), CornerRadius::same(6), Stroke::new(2.0, th.primary), egui::StrokeKind::Inside);
+}
+
 fn paste(session: &Session, text: &str) {
     let bracketed = session.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
     // Normalise newlines so a pasted script doesn't submit line by line.
@@ -773,6 +1123,16 @@ fn paste(session: &Session, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_paths_are_escaped_like_terminal_app() {
+        assert_eq!(shell_escape("/tmp/plain.png"), "/tmp/plain.png");
+        assert_eq!(
+            shell_escape("/Users/a/Screen Shot (1).png"),
+            "/Users/a/Screen\\ Shot\\ \\(1\\).png"
+        );
+        assert_eq!(shell_escape("it's$x"), "it\\'s\\$x");
+    }
 
     #[test]
     fn arrows_respect_app_cursor_and_modifiers() {

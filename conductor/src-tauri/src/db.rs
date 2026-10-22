@@ -159,9 +159,10 @@ pub fn load_snapshots(conn: &Connection) -> Vec<(SessionSnapshot, Option<Vec<u8>
                 cwd: r.get(6)?,
                 tab_order: r.get(7)?,
                 is_active: r.get(8)?,
-                updated_at: r.get(9)?,
+                // Column order is `scrollback, updated_at` (9, 10).
+                updated_at: r.get(10)?,
             },
-            r.get::<_, Option<Vec<u8>>>(10)?,
+            r.get::<_, Option<Vec<u8>>>(9)?,
         ))
     });
     rows.map(|r| r.flatten().collect()).unwrap_or_default()
@@ -190,9 +191,10 @@ pub fn load_closed_snapshots(conn: &Connection, limit: i64) -> Vec<(SessionSnaps
                 cwd: r.get(6)?,
                 tab_order: r.get(7)?,
                 is_active: r.get(8)?,
-                updated_at: r.get(9)?,
+                // Column order is `scrollback, updated_at` (9, 10).
+                updated_at: r.get(10)?,
             },
-            r.get::<_, Option<Vec<u8>>>(10)?,
+            r.get::<_, Option<Vec<u8>>>(9)?,
         ))
     });
     rows.map(|r| r.flatten().collect()).unwrap_or_default()
@@ -225,6 +227,14 @@ pub fn delete_snapshot(conn: &Connection, session_id: &str) {
 /// Remove all snapshots.
 pub fn clear_snapshots(conn: &Connection) {
     let _ = conn.execute("DELETE FROM session_snapshot", []);
+}
+
+/// Forget closed snapshots older than `before` (keeps "reopen closed tab" bounded).
+pub fn prune_closed_snapshots(conn: &Connection, before: i64) {
+    let _ = conn.execute(
+        "DELETE FROM session_snapshot WHERE closed_at IS NOT NULL AND closed_at < ?1",
+        params![before],
+    );
 }
 
 fn now_ms() -> i64 {

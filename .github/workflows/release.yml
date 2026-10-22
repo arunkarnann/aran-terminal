@@ -79,7 +79,7 @@ jobs:
             macOS: download the .dmg and drag to Applications. It isn't notarized, so on first
             launch allow it in System Settings → Privacy & Security → "Open Anyway"
             (or run `xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"`).
-            Linux: extract the .tar.gz and run `./aran`.
+            Linux: .deb (Debian/Ubuntu), .rpm (Fedora/RHEL), .AppImage (any distro), or extract the .tar.gz and run `./aran`.
           files: |
             native/target/bundle/*.dmg
             native/target/bundle/*.zip
@@ -103,25 +103,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config \
             libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev \
-            libxcursor-dev libxrandr-dev libxi-dev
+            libxcursor-dev libxrandr-dev libxi-dev \
+            rpm file
 
-      - name: Build
+      # .tar.gz + .deb + .rpm + .AppImage (see native/scripts/bundle-linux.sh).
+      - name: Build and package
         working-directory: native
-        run: cargo build --release
-
-      - name: Package
-        working-directory: native
-        run: |
-          set -euo pipefail
-          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          NAME="Aran-Terminal_${VERSION}_linux_x86_64"
-          mkdir -p "dist/$NAME"
-          cp target/release/aran README.md "dist/$NAME/"
-          cp ../conductor/src-tauri/icons/128x128.png "dist/$NAME/aran.png"
-          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+        run: ./scripts/bundle-linux.sh
 
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: "Aran Terminal ${{ github.ref_name }}"
-          files: native/dist/*.tar.gz
+          files: |
+            native/dist/*.tar.gz
+            native/dist/*.deb
+            native/dist/*.rpm
+            native/dist/*.AppImage

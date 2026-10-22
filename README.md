@@ -18,17 +18,19 @@ Since **v3.0.0** the UI is egui + `alacritty_terminal`: a ~6 MB universal downlo
 
 <br />
 
-### [⬇️ Download for macOS (Apple Silicon + Intel) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.2_universal.dmg)
+### [⬇️ Download for macOS (Apple Silicon + Intel) — .dmg](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.1.0_universal.dmg)
 
-[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Universal)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.2_universal.dmg)
+[![Download .dmg](https://img.shields.io/badge/Download-.dmg%20(Universal)-50fa7b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.1.0_universal.dmg)
 
 <sub>~6 MB · not notarized — on first launch allow it in **System Settings → Privacy & Security → Open Anyway**
 (or `xattr -dr com.apple.quarantine "/Applications/Aran Terminal.app"`) · maintainers: see [SIGNING.md](conductor/SIGNING.md)</sub>
 
-### [⬇️ Download for Linux (x86_64) — .tar.gz](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.0.2_linux_x86_64.tar.gz)
+### [⬇️ Download for Linux (x86_64) — .tar.gz](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.1.0_linux_x86_64.tar.gz)
 
-<sub>Extract and run `./aran`. The v2 Tauri builds (.deb / .rpm / .AppImage) remain on the
-[v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).</sub>
+<sub>Also as [.deb](https://github.com/arunkarnann/aran-terminal/releases/latest/download/aran-terminal_3.1.0_amd64.deb) ·
+[.rpm](https://github.com/arunkarnann/aran-terminal/releases/latest/download/aran-terminal-3.1.0-1.x86_64.rpm) ·
+[.AppImage](https://github.com/arunkarnann/aran-terminal/releases/latest/download/Aran-Terminal_3.1.0_x86_64.AppImage).
+The tarball: extract and run `./aran`.</sub>
 
 > **Upgrading from v2.x:** v2 apps don't auto-update to v3 — download v3 once. The native
 > app keeps its data in `native.db` next to the v2 database. Source: [`native/`](native/).
@@ -71,15 +73,27 @@ notifies you when a session goes quiet or asks a question.
   vim, htop), so scrolling scrolls the app instead of walking its prompt history.
 - **Issues** pane (⌘I) — a GUI for the project's local [Beads](https://github.com/steveyegge/beads)
   (`bd`) tracker: issues by status, priorities, create / update / close / reopen, details + deps.
-- **Git** pane (⌘⇧G) — status, stage/unstage, diffs, commit, branches, fetch/pull/push, stashes.
+- **Git** pane (⌘⇧G) — status, stage/unstage, diffs, commit, branches (switch / merge /
+  delete), fetch/pull/push, stashes, and browsing another branch's log to cherry-pick from it.
 - **Command history** pane (⌘Y) — search everything you ran, click to type it again.
+- **Command blocks** (from v3.1) — Warp-style blocks per command: a status gutter
+  (running / exit 0 / failed), hover for copy command / output / all and re-run, a sticky
+  header for the command you're scrolled inside, ⌘↑ ⌘↓ to jump between blocks.
+- **Focus timer** (from v3.1) — Pomodoro-style deep-work blocks bound to a session, with
+  a progress ring, daily goal + streak, break prompts, and notifications from other
+  sessions muted while you focus (then surfaced as a catch-up).
+- **Session restore** (from v3.1) — tabs come back on launch with their scrollback;
+  ⌘⇧T reopens the last closed tab.
+- **Task labels** (from v3.1) — a per-session "what am I doing here" note on the dashboard.
+- **File-access onboarding** (from v3.1, macOS) — one-time Full Disk Access / folder
+  permission setup so dropped files don't trigger a prompt each.
 - **Over-the-air updates** (from v3.0.1) — the app checks GitHub Releases and updates itself.
 - **Themes** — Dracula, Tokyo Night Storm, GitHub Light, Catppuccin Mocha, GitHub Dark,
   One Dark, Material Palenight, Nord.
 - **Local-first persistence** — SQLite (WAL mode) via `rusqlite`.
 
-**v2 only (Tauri build, not yet ported to v3):** Warp-style command blocks, focus timer,
-GitHub Issues sidebar and session restore with scrollback. Get them from the
+**v2 only (Tauri build, not yet ported to v3):** GitHub Issues sidebar (v3 has the local
+Beads tracker instead), the `--help` flag palette, CJK font fallback. Get them from the
 [v2.9.0 release](https://github.com/arunkarnann/aran-terminal/releases/tag/v2.9.0).
 
 ## Stack

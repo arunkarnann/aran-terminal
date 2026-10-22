@@ -63,6 +63,9 @@ enum Op {
     StashApply(usize),
     StashDrop(usize),
     AbortMerge,
+    Merge(String),
+    CherryPick { hash: String, short: String },
+    DeleteBranch { name: String, force: bool },
 }
 
 impl Op {
@@ -85,6 +88,10 @@ impl Op {
             Op::StashApply(_) => ("Applying stash…".into(), Some("Applied stash".into())),
             Op::StashDrop(_) => ("Dropping stash…".into(), Some("Dropped stash".into())),
             Op::AbortMerge => ("Aborting…".into(), Some("Aborted".into())),
+            Op::Merge(b) => (format!("Merging {b}…"), Some(format!("Merged {b}"))),
+            Op::CherryPick { short, .. } => (format!("Cherry-picking {short}…"), Some(format!("Cherry-picked {short}"))),
+            Op::DeleteBranch { name, force: true } => (format!("Force-deleting {name}…"), Some(format!("Deleted {name}"))),
+            Op::DeleteBranch { name, .. } => (format!("Deleting {name}…"), Some(format!("Deleted {name}"))),
         }
     }
 
@@ -105,15 +112,32 @@ impl Op {
             Op::StashApply(i) => git::stash_apply(repo, i),
             Op::StashDrop(i) => git::stash_drop(repo, i),
             Op::AbortMerge => git::abort_merge(repo),
+            Op::Merge(b) => git::merge(repo, &b).and_then(op_result),
+            Op::CherryPick { hash, .. } => git::cherry_pick(repo, &hash).and_then(op_result),
+            Op::DeleteBranch { name, force } => git::delete_branch(repo, &name, force),
         }
+    }
+}
+
+/// Merge / cherry-pick outcome: conflicts are reported as an error naming the files and
+/// leave the operation in progress (the banner offers Abort).
+fn op_result(r: git::GitOpResult) -> Result<String, String> {
+    if r.ok && r.conflicts.is_empty() {
+        Ok(r.output)
+    } else if !r.conflicts.is_empty() {
+        Err(format!("Conflicts in {} file(s) — resolve and commit, or Abort: {}", r.conflicts.len(), r.conflicts.join(", ")))
+    } else if r.output.trim().is_empty() {
+        Err("git command failed".into())
+    } else {
+        Err(r.output)
     }
 }
 
 enum Job {
     Repos { cwd: String },
-    Refresh { repo: String },
+    Refresh { repo: String, log_ref: Option<String> },
     Diff { repo: String, req: u64, src: DiffSrc },
-    Op { repo: String, op: Op },
+    Op { repo: String, op: Op, log_ref: Option<String> },
 }
 
 type DiffLines = Vec<(LineKind, String)>;
@@ -122,10 +146,17 @@ enum Msg {
     Repos { cwd: String, list: Vec<GitRepo> },
     Snapshot { repo: String, snap: Box<Snapshot> },
     Diff { repo: String, req: u64, body: Result<(DiffLines, String), String> },
-    Op { repo: String, done: Option<String>, was_commit: bool, result: Result<String, String> },
+    Op {
+        repo: String,
+        done: Option<String>,
+        was_commit: bool,
+        /// A plain `git branch -d` that may need `-D`: the branch, to offer a force delete.
+        force_offer: Option<String>,
+        result: Result<String, String>,
+    },
 }
 
-fn load_snapshot(repo: &str) -> Snapshot {
+fn load_snapshot(repo: &str, log_ref: Option<&str>) -> Snapshot {
     let mut status = git::status(repo);
     // `git status --porcelain=v1` C-quotes unusual paths ("sp ace.txt"); git.rs passes
     // them through verbatim, so turn them back into real paths before we act on them.
@@ -139,7 +170,7 @@ fn load_snapshot(repo: &str) -> Snapshot {
         return Snapshot { status, log: Vec::new(), branches: Vec::new(), remotes: Vec::new(), stashes: Vec::new(), merging: false };
     }
     Snapshot {
-        log: git::log(repo, LOG_LIMIT),
+        log: git::log_of(repo, log_ref, LOG_LIMIT),
         branches: git::branches(repo),
         remotes: git::remotes(repo),
         stashes: git::stashes(repo),
@@ -198,8 +229,8 @@ fn run_job(job: Job) -> Vec<Msg> {
             let list = root_repos(git::repos(&cwd), toplevel);
             vec![Msg::Repos { cwd, list }]
         }
-        Job::Refresh { repo } => {
-            let snap = Box::new(load_snapshot(&repo));
+        Job::Refresh { repo, log_ref } => {
+            let snap = Box::new(load_snapshot(&repo, log_ref.as_deref()));
             vec![Msg::Snapshot { repo, snap }]
         }
         Job::Diff { repo, req, src } => {
@@ -209,13 +240,17 @@ fn run_job(job: Job) -> Vec<Msg> {
             });
             vec![Msg::Diff { repo, req, body }]
         }
-        Job::Op { repo, op } => {
+        Job::Op { repo, op, log_ref } => {
             let was_commit = matches!(op, Op::Commit { .. });
+            let force_offer = match &op {
+                Op::DeleteBranch { name, force: false } => Some(name.clone()),
+                _ => None,
+            };
             let (_, done) = op.describe();
             let result = op.run(&repo);
             // Every write is followed by a fresh snapshot.
-            let snap = Box::new(load_snapshot(&repo));
-            vec![Msg::Op { repo: repo.clone(), done, was_commit, result }, Msg::Snapshot { repo, snap }]
+            let snap = Box::new(load_snapshot(&repo, log_ref.as_deref()));
+            vec![Msg::Op { repo: repo.clone(), done, was_commit, force_offer, result }, Msg::Snapshot { repo, snap }]
         }
     }
 }
@@ -482,6 +517,7 @@ enum Armed {
     DeleteUntracked(String),
     DiscardAll,
     DropStash(usize),
+    DeleteBranch(String),
 }
 
 enum Action {
@@ -494,6 +530,9 @@ enum Action {
     Arm(Option<Armed>),
     ToggleLog,
     ToggleStash,
+    ToggleBranches,
+    /// Which ref the Commits list shows (None = HEAD).
+    SetLogRef(Option<String>),
 }
 
 pub struct GitPanel {
@@ -526,6 +565,11 @@ pub struct GitPanel {
     armed: Option<Armed>,
     show_log: bool,
     show_stash: bool,
+    show_branches: bool,
+    /// Commits list source (None = HEAD); another branch enables cherry-picking from it.
+    log_ref: Option<String>,
+    /// A `git branch -d` refused as unmerged: offer `-D` for this branch.
+    force_delete: Option<String>,
 }
 
 impl GitPanel {
@@ -556,6 +600,9 @@ impl GitPanel {
             armed: None,
             show_log: true,
             show_stash: true,
+            show_branches: false,
+            log_ref: None,
+            force_delete: None,
         }
     }
 
@@ -573,7 +620,8 @@ impl GitPanel {
         if !force && self.pending_snaps > 0 {
             return;
         }
-        if self.send(Job::Refresh { repo }) {
+        let log_ref = self.log_ref.clone();
+        if self.send(Job::Refresh { repo, log_ref }) {
             self.pending_snaps += 1;
         }
         self.last_refresh = Instant::now();
@@ -602,17 +650,21 @@ impl GitPanel {
         self.diff = None;
         self.armed = None;
         self.new_branch = None;
+        self.log_ref = None;
+        self.force_delete = None;
         self.refresh(true);
     }
 
     fn run_op(&mut self, op: Op) {
         let Some(repo) = self.repo.clone() else { return };
         let (progress, _) = op.describe();
-        if self.send(Job::Op { repo, op }) {
+        let log_ref = self.log_ref.clone();
+        if self.send(Job::Op { repo, op, log_ref }) {
             self.busy = Some(progress);
             self.ops_inflight += 1;
             self.pending_snaps += 1;
             self.error = None;
+            self.force_delete = None;
             self.armed = None;
         }
     }
@@ -659,7 +711,7 @@ impl GitPanel {
                         d.body = Some(body);
                     }
                 }
-                Msg::Op { repo, done, was_commit, result } => {
+                Msg::Op { repo, done, was_commit, force_offer, result } => {
                     self.ops_inflight = self.ops_inflight.saturating_sub(1);
                     if self.ops_inflight == 0 {
                         self.busy = None;
@@ -683,6 +735,9 @@ impl GitPanel {
                         }
                         Err(e) => {
                             let e = if e.trim().is_empty() { "git command failed".to_string() } else { e };
+                            if e.contains("not fully merged") {
+                                self.force_delete = force_offer;
+                            }
                             self.error = Some(e.chars().take(800).collect());
                         }
                     }
@@ -745,7 +800,7 @@ impl GitPanel {
                 });
             }
             Some(s) => {
-                self.feedback(ui);
+                self.feedback(ui, &mut actions);
                 if self.diff.is_some() {
                     self.diff_view(ui, s, &mut actions);
                 } else {
@@ -753,6 +808,7 @@ impl GitPanel {
                         self.commit_box(ui, s, &mut actions);
                         ui.add_space(6.0);
                         self.changes(ui, s, &mut actions);
+                        self.branches(ui, s, &mut actions);
                         self.commits(ui, s, &mut actions);
                         self.stashes(ui, s, &mut actions);
                     });
@@ -786,6 +842,13 @@ impl GitPanel {
                 Action::Arm(a) => self.armed = a,
                 Action::ToggleLog => self.show_log = !self.show_log,
                 Action::ToggleStash => self.show_stash = !self.show_stash,
+                Action::ToggleBranches => self.show_branches = !self.show_branches,
+                Action::SetLogRef(r) => {
+                    if r != self.log_ref {
+                        self.log_ref = r;
+                        self.refresh(true);
+                    }
+                }
             }
         }
     }
@@ -979,10 +1042,11 @@ impl GitPanel {
     }
 
     /// Inline op error (dismissable) or a short-lived success notice.
-    fn feedback(&mut self, ui: &mut egui::Ui) {
+    fn feedback(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let th = theme::t();
         if let Some(e) = self.error.clone() {
             let mut dismiss = false;
+            let force = self.force_delete.clone();
             Frame::new()
                 .fill(th.error.gamma_multiply(0.12))
                 .corner_radius(CornerRadius::same(4))
@@ -999,9 +1063,18 @@ impl GitPanel {
                             });
                         });
                     });
+                    if let Some(name) = force {
+                        if ui.add(egui::Button::new(RichText::new(format!("Force delete {name}")).color(th.error).size(11.0)).small())
+                            .on_hover_text("git branch -D — the branch's unmerged commits are lost")
+                            .clicked()
+                        {
+                            actions.push(Action::Op(Op::DeleteBranch { name, force: true }));
+                        }
+                    }
                 });
             if dismiss {
                 self.error = None;
+                self.force_delete = None;
             }
         } else if let Some((n, _)) = &self.notice {
             ui.add(egui::Label::new(RichText::new(format!("✓ {n}")).color(th.running).size(11.0)).truncate());
@@ -1175,13 +1248,97 @@ impl GitPanel {
 
     // ------------------------------------------------------------ log + stashes
 
+    /// Local branches: switch, merge into the current one, delete (two clicks).
+    fn branches(&mut self, ui: &mut egui::Ui, s: &Snapshot, actions: &mut Vec<Action>) {
+        let th = theme::t();
+        let busy = self.busy.is_some();
+        let locals: Vec<&GitBranch> = s.branches.iter().filter(|b| !b.remote).collect();
+        let open = self.show_branches;
+        let mut toggle = false;
+        section_header(ui, "Branches", locals.len(), Some((open, &mut toggle)), |_| {});
+        if toggle {
+            actions.push(Action::ToggleBranches);
+        }
+        if !open {
+            ui.add_space(4.0);
+            return;
+        }
+        let current = locals.iter().find(|b| b.current).map(|b| b.name.clone());
+        for b in &locals {
+            let armed = self.armed == Some(Armed::DeleteBranch(b.name.clone()));
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if !b.current {
+                        let del = if armed { RichText::new("Delete?").color(th.error) } else { RichText::new("🗑").color(th.muted) };
+                        let r = ui.add_enabled(!busy, egui::Button::new(del.size(11.0)).frame(false));
+                        if r.on_hover_text(format!("Delete branch {}", b.name)).clicked() {
+                            actions.push(if armed {
+                                Action::Op(Op::DeleteBranch { name: b.name.clone(), force: false })
+                            } else {
+                                Action::Arm(Some(Armed::DeleteBranch(b.name.clone())))
+                            });
+                        }
+                        let tip = match &current {
+                            Some(c) => format!("Merge {} into {c}", b.name),
+                            None => "Merge into the current branch".to_string(),
+                        };
+                        let m = egui::Button::new(RichText::new("⤵").color(th.muted).size(11.0)).frame(false);
+                        if ui.add_enabled(!busy && !s.merging && current.is_some(), m).on_hover_text(tip).clicked() {
+                            actions.push(Action::Op(Op::Merge(b.name.clone())));
+                        }
+                    }
+                    if let Some(u) = &b.upstream {
+                        ui.add(egui::Label::new(RichText::new(u).color(th.muted).size(10.5)).truncate());
+                    }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        let txt = RichText::new(&b.name).size(11.5).color(if b.current { th.primary } else { th.text });
+                        let txt = if b.current { txt.strong() } else { txt };
+                        let tip = if b.current { "Current branch".to_string() } else { format!("Switch to {}", b.name) };
+                        let r = ui.add_enabled(!busy && !s.merging, egui::Button::new(txt).frame(false)).on_hover_text(tip);
+                        if r.clicked() && !b.current {
+                            actions.push(Action::Op(Op::Checkout(b.name.clone())));
+                        }
+                    });
+                });
+            });
+        }
+        ui.add_space(6.0);
+    }
+
     fn commits(&mut self, ui: &mut egui::Ui, s: &Snapshot, actions: &mut Vec<Action>) {
         let th = theme::t();
+        let busy = self.busy.is_some();
         let open = self.show_log;
         let mut toggle = false;
-        section_header(ui, "Commits", s.log.len(), Some((open, &mut toggle)), |_| {});
+        let log_ref = self.log_ref.clone();
+        let mut picked: Option<Option<String>> = None;
+        section_header(ui, "Commits", s.log.len(), Some((open, &mut toggle)), |ui| {
+            if !open {
+                return;
+            }
+            // Browse another branch's history — its commits can then be cherry-picked.
+            let label = log_ref.clone().unwrap_or_else(|| "HEAD".into());
+            egui::ComboBox::from_id_salt("git-log-ref")
+                .selected_text(RichText::new(label).size(10.5))
+                .width(120.0)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(log_ref.is_none(), RichText::new("HEAD").size(11.0)).clicked() {
+                        picked = Some(None);
+                    }
+                    for b in &s.branches {
+                        let on = log_ref.as_deref() == Some(b.name.as_str());
+                        if ui.selectable_label(on, RichText::new(&b.name).size(11.0)).clicked() {
+                            picked = Some(Some(b.name.clone()));
+                        }
+                    }
+                });
+        });
         if toggle {
             actions.push(Action::ToggleLog);
+        }
+        if let Some(p) = picked {
+            actions.push(Action::SetLogRef(p));
         }
         if !open {
             ui.add_space(4.0);
@@ -1190,29 +1347,25 @@ impl GitPanel {
         if s.log.is_empty() {
             ui.label(RichText::new("No commits yet").color(th.muted).size(11.0));
         }
+        let pick_from = self.log_ref.is_some();
         for c in &s.log {
-            // Reserve a background slot so the hover tint is painted under the text.
-            let bg = ui.painter().add(egui::Shape::Noop);
-            let r = Frame::new()
-                .inner_margin(Margin::symmetric(4, 2))
-                .corner_radius(CornerRadius::same(4))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.add(egui::Label::new(RichText::new(&c.subject).color(th.text).size(12.0)).truncate().selectable(false));
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("{} · {} · {}", c.short, c.author, c.relative)).color(th.muted).size(10.5),
-                        )
-                        .truncate()
-                        .selectable(false),
-                    );
-                })
-                .response
-                .interact(Sense::click());
-            if r.hovered() {
-                ui.painter().set(bg, egui::epaint::RectShape::filled(r.rect, CornerRadius::same(4), th.border.gamma_multiply(0.35)));
+            let mut open_diff = false;
+            if pick_from {
+                ui.horizontal(|ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let b = egui::Button::new(RichText::new("🍒").size(11.0)).frame(false);
+                        if ui.add_enabled(!busy && !s.merging, b).on_hover_text(format!("Cherry-pick {} onto the current branch", c.short)).clicked() {
+                            actions.push(Action::Op(Op::CherryPick { hash: c.hash.clone(), short: c.short.clone() }));
+                        }
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            open_diff = commit_row(ui, c);
+                        });
+                    });
+                });
+            } else {
+                open_diff = commit_row(ui, c);
             }
-            if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            if open_diff {
                 actions.push(Action::Diff(format!("{} · {}", c.short, c.subject), Some(c.hash.clone()), DiffSrc::Commit { hash: c.hash.clone() }));
             }
         }
@@ -1375,6 +1528,31 @@ fn branch_menu(ui: &mut egui::Ui, s: &Snapshot, remotes: &[&str], actions: &mut 
             }
         }
     }
+}
+
+/// One commit in the log. Returns true when clicked (open its diff).
+fn commit_row(ui: &mut egui::Ui, c: &GitCommit) -> bool {
+    let th = theme::t();
+    // Reserve a background slot so the hover tint is painted under the text.
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let r = Frame::new()
+        .inner_margin(Margin::symmetric(4, 2))
+        .corner_radius(CornerRadius::same(4))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(RichText::new(&c.subject).color(th.text).size(12.0)).truncate().selectable(false));
+            ui.add(
+                egui::Label::new(RichText::new(format!("{} · {} · {}", c.short, c.author, c.relative)).color(th.muted).size(10.5))
+                    .truncate()
+                    .selectable(false),
+            );
+        })
+        .response
+        .interact(Sense::click());
+    if r.hovered() {
+        ui.painter().set(bg, egui::epaint::RectShape::filled(r.rect, CornerRadius::same(4), th.border.gamma_multiply(0.35)));
+    }
+    r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
 fn small_btn(text: &str) -> egui::Button<'_> {

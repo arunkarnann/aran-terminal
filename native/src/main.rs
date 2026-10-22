@@ -25,9 +25,13 @@ mod git;
 
 mod app;
 mod beads;
+mod blocks;
+mod focus;
 mod git_panel;
 mod history;
 mod fonts;
+mod perms;
+mod scrollback;
 mod tasks;
 mod timefmt;
 mod session;
@@ -104,6 +108,8 @@ fn main() -> eframe::Result {
     {
         let conn = lock(&db);
         db::reconcile_orphans(&conn);
+        // Closed tabs stay reopenable (⌘⇧T) for a week.
+        db::prune_closed_snapshots(&conn, session::now_ms() - 7 * timefmt::DAY_MS);
         if !db::is_seeded(&conn) {
             let hist = read_shell_history(1000);
             if !hist.is_empty() {

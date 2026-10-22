@@ -239,13 +239,26 @@ pub fn status(cwd: &str) -> GitStatus {
 }
 
 pub fn log(cwd: &str, limit: usize) -> Vec<GitCommit> {
+    log_of(cwd, None, limit)
+}
+
+/// Recent commits reachable from `rev` (a branch or any ref; None = HEAD). Lets the UI
+/// browse another branch's history, e.g. to cherry-pick from it.
+pub fn log_of(cwd: &str, rev: Option<&str>, limit: usize) -> Vec<GitCommit> {
     if cwd.is_empty() || !is_repo(cwd) {
+        return Vec::new();
+    }
+    if rev.is_some_and(|r| !valid_ref(r)) {
         return Vec::new();
     }
     // Unit-separator (\x1f) between fields, record per line.
     let fmt = "--pretty=format:%H\x1f%h\x1f%s\x1f%an\x1f%ar\x1f%at";
     let n = format!("-n{}", limit.clamp(1, 500));
-    let Some(out) = run(cwd, &["log", &n, fmt]) else {
+    let mut args = vec!["log", &n, fmt];
+    if let Some(r) = rev {
+        args.push(r);
+    }
+    let Some(out) = run(cwd, &args) else {
         return Vec::new();
     };
     out.lines()
