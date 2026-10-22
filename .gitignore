@@ -28,3 +28,8 @@ conductor/src-tauri/target/
 # Logs
 logs/
 *.log
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

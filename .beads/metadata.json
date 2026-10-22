@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "macrosx",
+  "project_id": "d1c0b1e6-9045-4711-97ba-29f544977f34"
+}
